@@ -1,0 +1,32 @@
+PersonaPet 使用说明
+
+1. 双击 PersonaPet.exe 启动。
+   第一次启动如果弹出 API Key 输入框，请先填写或取消。角色窗口会在这个弹窗结束后出现。
+
+2. 第一次启动需要填写自己的 API Key：
+   - DeepSeek API Key：用于大模型对话。
+   - Doubao ASR API Key：用于豆包语音识别。取消填写会回退到本地 Whisper。
+
+3. 也可以先在 PowerShell 设置环境变量：
+   $env:DEEPSEEK_API_KEY="你的 DeepSeek Key"
+   $env:DOUBAO_ASR_API_KEY="你的豆包 ASR Key"
+
+4. 快捷键：
+   - F3：选择 VOICEVOX 角色。
+   - V / F2：开启自由语音对话。
+   - B：关闭自由语音对话。
+   - C：聚焦文字输入框。
+   - ESC：退出。
+
+5. 不要删除这些目录：
+   - hiyori_pro_zh
+   - third_party
+   - outputs
+
+6. 如果 VOICEVOX 启动失败，可能是安全软件阻止了 third_party\VOICEVOX\engine\windows-cpu\run.exe。
+
+7. 如果只看到输入框但没有角色，请确认：
+   - hiyori_pro_zh 文件夹没有被删除。
+   - _internal 文件夹没有被删除。
+   - 显卡驱动支持 OpenGL。
+   - 不要只复制 PersonaPet.exe，必须保留整个 PersonaPet 文件夹。

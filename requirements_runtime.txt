@@ -1,0 +1,5 @@
+PyQt5
+live2d-py
+numpy
+sounddevice
+faster-whisper

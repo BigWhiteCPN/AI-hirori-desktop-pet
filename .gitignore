@@ -1,0 +1,33 @@
+# Python/cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local secrets and machine-specific config
+persona_llm_config.json
+.env
+.env.*
+
+# Runtime-generated data
+logs/
+outputs/
+*.log
+*.wav
+*.mp3
+*.docx
+*.pptx
+
+# Build/package artifacts
+build/
+dist/
+dist_fixed/
+*.zip
+
+# Large local third-party engines/models
+third_party/
+
+# Local editor/OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
