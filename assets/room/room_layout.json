@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "model_z": 50,
+  "remove_checkerboard": false,
+  "background": {
+    "asset": "background.png"
+  },
+  "activities": {
+    "idle": {
+      "label": "待机",
+      "detail": "在房间里发呆，偶尔看看你。",
+      "x": 0.5,
+      "y": 0.66,
+      "scale": 0.72
+    },
+    "writing": {
+      "label": "写作",
+      "detail": "正在写自己的稿子。",
+      "x": 0.73,
+      "y": 0.62,
+      "scale": 0.6
+    },
+    "planning": {
+      "label": "构思",
+      "detail": "在桌前整理下一件想做的事。",
+      "x": 0.72,
+      "y": 0.62,
+      "scale": 0.62
+    },
+    "walking": {
+      "label": "散步",
+      "detail": "在小屋里慢慢走动，换换心情。",
+      "x_min": 0.3,
+      "x_max": 0.68,
+      "y": 0.66,
+      "scale": 0.63
+    },
+    "playing": {
+      "label": "玩耍",
+      "detail": "被玩具和新鲜东西吸引住了。",
+      "x": 0.6,
+      "y": 0.68,
+      "scale": 0.65
+    },
+    "resting": {
+      "label": "休息",
+      "detail": "能量偏低，先在床边安静恢复。",
+      "x": 0.25,
+      "y": 0.64,
+      "scale": 0.58
+    },
+    "waiting": {
+      "label": "想你",
+      "detail": "有点想靠近，但还在克制地等你。",
+      "x": 0.45,
+      "y": 0.66,
+      "scale": 0.64
+    },
+    "chatting": {
+      "label": "陪你",
+      "detail": "正在把注意力放在你身上。",
+      "x": 0.5,
+      "y": 0.65,
+      "scale": 0.68
+    }
+  },
+  "objects": [
+    {
+      "name": "window",
+      "asset": "window.png",
+      "x": 0.07,
+      "y": 0.15,
+      "w": 0.2,
+      "z": 10
+    },
+    {
+      "name": "bookshelf",
+      "asset": "bookshelf.png",
+      "x": 0.74,
+      "y": 0.15,
+      "w": 0.18,
+      "z": 20
+    },
+    {
+      "name": "bed",
+      "asset": "bed.png",
+      "x": 0.05,
+      "y": 0.57,
+      "w": 0.26,
+      "z": 30,
+      "shadow": true,
+      "shadow_opacity": 0.16
+    },
+    {
+      "name": "rug",
+      "asset": "rug.png",
+      "x": 0.34,
+      "y": 0.73,
+      "w": 0.34,
+      "z": 35,
+      "shadow": false
+    },
+    {
+      "name": "desk",
+      "asset": "desk.png",
+      "x": 0.67,
+      "y": 0.58,
+      "w": 0.27,
+      "z": 60,
+      "shadow": true,
+      "shadow_opacity": 0.2
+    },
+    {
+      "name": "toybox",
+      "asset": "toybox.png",
+      "x": 0.5,
+      "y": 0.66,
+      "w": 0.15,
+      "z": 70,
+      "shadow": true,
+      "shadow_opacity": 0.18
+    }
+  ]
+}

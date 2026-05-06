@@ -11,6 +11,7 @@ persona_llm_config.json
 # Runtime-generated data
 logs/
 outputs/
+user_data_backups/
 *.log
 *.wav
 *.mp3
