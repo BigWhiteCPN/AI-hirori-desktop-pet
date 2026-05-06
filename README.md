@@ -2,6 +2,38 @@
 
 Live2D desktop pet prototype with LLM chat, speech input, TTS, memory, proactive behavior, life-writing, and simple internal drive states.
 
+## 中文说明
+
+这是一个本地运行的 Live2D AI 桌宠原型，核心目标是做出一个有记忆、有情绪、有生活节奏、会主动思考和写作的陪伴角色。她可以和用户聊天、听语音输入、播放语音、记录互动记忆，并根据关系、心情、能量、身体需求和创作状态产生主动行为。
+
+主要功能：
+
+- LLM 对话：支持文本聊天，并通过 prompt 约束角色语气、情绪和输出格式。
+- 语音能力：支持语音输入、TTS 播放和简单的语音表现控制。
+- 记忆系统：记录用户输入、角色输出、关系状态、反思内容和联想路径。
+- 主动行为：用户安静一段时间后，角色会根据记忆、情绪、能量和关系状态主动搭话、安静陪伴或进入写作。
+- 写作系统：角色可以写日记和小说，并通过书架 UI 翻看生成内容。
+- 心理与性格：包含 INFP 风格的心模块、心情状态、反思记录和用户画像估计。
+- 生理需求：包含饥饿、口渴、疲劳、困意、舒适度、压力和亲近需求等非露骨状态，用于影响情绪和行为。
+- 可视化：包含记忆图、状态面板、房间模式、日记/小说书架等 UI。
+
+本项目会生成本地运行数据，例如记忆、日记、小说、日志、语音缓存和本地 API 配置。这些内容默认不会提交到 GitHub，请不要把 `outputs/`、`logs/`、`persona_llm_config.json`、`user_data_backups/` 加入仓库。
+
+常用运行方式：
+
+```powershell
+E:\PythonProject1\pythonProject_1\.venv\Scripts\python.exe E:\PythonProject1\pythonProject_1\person_test_all\persona_bot_test.py
+```
+
+常用按键：
+
+- `O` - 打开或关闭小屋模式。
+- `D` - 打开日记和小说书架。
+- `P` - 亲密度作弊按键，直接设为最高亲密阶段。
+- `Shift+E` - 能量作弊按键，直接回满能量。
+- `R` - 触发随机待机动作。
+- `ESC` - 退出程序。
+
 ## What is included
 
 - `persona_bot_test.py` - main desktop pet application.
@@ -40,6 +72,14 @@ $env:DOUBAO_ASR_API_KEY="your_key"
 ```
 
 Do not commit `persona_llm_config.json`.
+
+## Voice style
+
+Default voice design prompt:
+
+```text
+可爱少女嗲嗲的
+```
 
 ## Run
 
