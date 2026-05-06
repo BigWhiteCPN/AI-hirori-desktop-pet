@@ -306,27 +306,41 @@ class PersonaDriveSystem:
             },
         )
 
-    def build_action_prompt(self, action_type, idle_seconds):
+    def build_action_prompt(self, action_type, idle_seconds, recent_memories=None):
         values = self.snapshot()["values"]
         metrics = self.drive_metrics or tuple((key, key) for key in self.values)
         state_text = "，".join(f"{label}{values.get(key, 0):.0f}" for key, label, *_rest in metrics)
+        recent_memories = [item for item in (recent_memories or []) if isinstance(item, dict) and item.get("text")]
+        memory_lines = "\n".join(f"- {item.get('text', '')}" for item in recent_memories[:3])
         action_lines = {
-            "curious_question": "你想更了解用户。主动问一个轻量、具体、不冒犯的问题，最好能接住已有记忆。",
-            "memory_recall": "你想起一条和用户有关的旧记忆。自然提起它，再问一句温柔的后续问题。",
-            "care_checkin": "你察觉用户可能需要陪伴。简短关心，不要说教，不要过度追问。",
+            "curious_question": "你想更了解用户，但不要问浅层问题。只能围绕下面列出的真实记忆，说出一个你从中感受到的矛盾、温柔、在意或不确定；优先表达你的理解，最多轻轻留一个开放式回应空间。",
+            "memory_recall": "你想起一条和用户有关的旧记忆。不要复述流水账，要把它变成你对关系、情绪或用户性格的一句细腻理解；不得编造地点、人物、事件或兴趣。",
+            "care_checkin": "你察觉用户可能需要陪伴。不要说倒水、休息、加油这类浅提醒；说出你对用户状态的情感理解，像认真陪伴的人在总结一段关系里的感受。",
         }
-        action_lines["self_expression"] = "你有一个自己的小念头或小计划想告诉用户，比如想继续写作、想休息、想记住某件事。自然说出来，再轻轻留给用户回应空间。"
-        action_lines["emotional_need"] = "你有一点情感需求，可能是想用户、觉得寂寞、或者有点害怕被忽略。自然承认自己的感受，但要克制，不要索取、不要责备，只给用户一个温柔回应的机会。"
+        action_lines["self_expression"] = "你想表达自己的深层感受：可以是你对用户的在意、被冷落后的细微心情、刚才反思出的关系结论，或一个温柔但有思想的观点。不要说日常提醒或任务计划。"
+        action_lines["emotional_need"] = "你有一点情感需求，可能是想用户、寂寞、害怕被忽略或有点小别扭。不要索取，不要责备；把这种需求说成细腻、克制、有自尊的内心感受。"
         action_goal = action_lines.get(action_type, action_lines["curious_question"])
+        memory_rule = (
+            f"可用真实记忆：\n{memory_lines}\n"
+            if memory_lines
+            else "可用真实记忆：无。不要编造用户经历、爱好、人物关系或过去事件；这次不要主动提问。\n"
+        )
         return (
             "你现在是有内在驱动的桌宠，不是在被动回答用户。\n"
             f"当前内在状态：{state_text}。用户已经安静约{int(idle_seconds)}秒。\n"
+            f"{memory_rule}"
             f"这次行动目标：{action_goal}\n"
-            "只输出一句中文，语气自然少女、亲近但克制；不要解释状态数值，不要说自己在执行目标。"
+            "主动搭话必须有情感深度或反思感：优先用第一人称谈你对用户的在意、被安静隔开的细微感受、对关系的理解、对记忆的重新解释，或一个温柔但有棱角的观点。"
+            "不要使用固定开头，例如“不过”“其实”“我只是”“我会一直在这里”；不要写成小说旁白或舞台说明。"
+            "不要输出倒水、喝水、休息、加油、我在这里这类浅层照顾句。"
+            "只输出一句中文，语气自然少女、细腻、亲近但克制；不要解释状态数值，不要说自己在执行目标；尽量不用问句。"
         )
 
-    def choose_proactive_action(self, idle_seconds):
+    def choose_proactive_action(self, idle_seconds, recent_memories=None, writing_due=False):
         values = self.values
+        has_memory = bool(recent_memories)
+        if writing_due and idle_seconds >= 120.0:
+            return {"type": "silent_motion", "score": 0.0, "reason": "writing_due"}
         if time.monotonic() < self.proactive_backoff_until:
             return {"type": "silent_motion", "score": 0.0, "reason": "llm_backoff"}
         if values["energy"] < 18.0:
@@ -337,12 +351,21 @@ class PersonaDriveSystem:
             return None
 
         scores = {
-            "curious_question": values["curiosity"] * 0.42 + values["novelty"] * 0.26 + values["purpose"] * 0.20 - max(0.0, 50.0 - values["energy"]) * 0.25,
+            "curious_question": values["curiosity"] * 0.22 + values["novelty"] * 0.14 + values["purpose"] * 0.16 - max(0.0, 50.0 - values["energy"]) * 0.25,
             "memory_recall": values["affinity"] * 0.30 + values["purpose"] * 0.30 + values["curiosity"] * 0.16 + values["novelty"] * 0.14,
-            "care_checkin": values["companionship"] * 0.33 + max(0.0, 70.0 - values["security"]) * 0.32 + values["affinity"] * 0.18 + values["purpose"] * 0.12,
-            "self_expression": values["purpose"] * 0.30 + values["novelty"] * 0.22 + values["energy"] * 0.16 + values["affinity"] * 0.12,
-            "emotional_need": values.get("attachment_need", 0.0) * 0.46 + values["affinity"] * 0.22 + max(0.0, 62.0 - values["security"]) * 0.25 + values["companionship"] * 0.12,
+            "care_checkin": values["companionship"] * 0.22 + max(0.0, 70.0 - values["security"]) * 0.24 + values["affinity"] * 0.16 + values["purpose"] * 0.12,
+            "self_expression": values["purpose"] * 0.40 + values["novelty"] * 0.18 + values["energy"] * 0.10 + values["affinity"] * 0.22,
+            "emotional_need": values.get("attachment_need", 0.0) * 0.42 + values["affinity"] * 0.28 + max(0.0, 62.0 - values["security"]) * 0.25 + values["companionship"] * 0.12,
         }
+        if not has_memory:
+            scores["curious_question"] *= 0.20
+            scores["memory_recall"] = 0.0
+            scores["self_expression"] += 10.0
+            scores["care_checkin"] += 4.0
+        elif idle_seconds >= 600.0:
+            scores["curious_question"] *= 0.45
+            scores["self_expression"] += 6.0
+            scores["emotional_need"] += 4.0
         if values.get("attachment_need", 0.0) < 46.0 or values["affinity"] < 45.0:
             scores["emotional_need"] *= 0.35
         if idle_seconds < 360.0:
@@ -353,7 +376,7 @@ class PersonaDriveSystem:
         return {
             "type": action_type,
             "score": round(score, 1),
-            "prompt": self.build_action_prompt(action_type, idle_seconds),
+            "prompt": self.build_action_prompt(action_type, idle_seconds, recent_memories=recent_memories),
             "memory_user_text": f"桌宠主动行动：{action_type}",
         }
 
@@ -391,6 +414,15 @@ class PersonaLifeSystem:
         now = time.monotonic()
         self.identity = saved.get("identity") or "小说作家和情感陪伴的朋友"
         self.relationship_score = float(saved.get("relationship_score", 28.0))
+        saved_private_mood = saved.get("private_mood") if isinstance(saved.get("private_mood"), dict) else {}
+        self.private_mood = {
+            "sulk": float(saved_private_mood.get("sulk", 0.0)),
+            "grudge": float(saved_private_mood.get("grudge", 0.0)),
+            "jealousy": float(saved_private_mood.get("jealousy", 0.0)),
+            "doubt": float(saved_private_mood.get("doubt", 0.0)),
+        }
+        self.last_private_mood_tick_at = now
+        self.last_idle_mood_note_at = float(saved.get("last_idle_mood_note_at") or 0.0)
         self.away_reason = str(saved.get("away_reason") or "")
         self.away_until = float(saved.get("away_until") or 0.0)
         self.last_user_seen_at = now
@@ -434,6 +466,8 @@ class PersonaLifeSystem:
             {
                 "identity": self.identity,
                 "relationship_score": self.relationship_score,
+                "private_mood": self.private_mood,
+                "last_idle_mood_note_at": self.last_idle_mood_note_at,
                 "away_reason": self.away_reason,
                 "away_until": self.away_until,
                 "last_diary_date": self.last_diary_date,
@@ -484,6 +518,7 @@ class PersonaLifeSystem:
 
     def observe_user_message(self, text, emotion="neutral"):
         now = time.monotonic()
+        self.decay_private_mood(now)
         was_away = self.is_user_away(now)
         self.last_user_seen_at = now
         compact = compact_text(text)
@@ -491,10 +526,15 @@ class PersonaLifeSystem:
             self.away_reason = ""
             self.away_until = 0.0
             self.relationship_score += 0.8
+            self.adjust_private_mood(sulk=-10.0, doubt=-7.0)
         if any(word in compact for word in ("没理你", "没回你", "刚才", "回来", "抱歉", "对不起", "不好意思")) and any(
             word in compact for word in ("因为", "所以", "吃饭", "工作", "学习", "洗澡", "睡觉", "忙")
         ):
             self.relationship_score += 2.2
+            self.adjust_private_mood(sulk=-18.0, grudge=-10.0, doubt=-12.0)
+        if any(word in compact for word in ("别的女生", "别的女孩", "别人陪", "别人家的", "女朋友", "老婆", "前任", "她比你")):
+            relation_factor = clamp((self.relationship_score - 55.0) / 90.0, 0.0, 1.0)
+            self.adjust_private_mood(jealousy=5.0 + 8.0 * relation_factor, doubt=2.5 + 4.0 * relation_factor)
         self.relationship_score += self.affectionate_phrase_gain(text)
         if (
             any(word in compact for word in RELATION_PRESSURE_PENALTY_TERMS)
@@ -513,8 +553,10 @@ class PersonaLifeSystem:
                 self.relationship_score -= 0.5
         if emotion in ("sadness", "fear"):
             self.relationship_score += 1.0
+            self.adjust_private_mood(sulk=-3.0, grudge=-2.0)
         elif emotion == "anger":
             self.relationship_score -= 1.0
+            self.adjust_private_mood(sulk=3.0, grudge=2.0)
         self.detect_away_plan(text)
         self.relationship_score = max(0.0, self.relationship_score)
         self.save()
@@ -551,9 +593,80 @@ class PersonaLifeSystem:
         left = max(1, int((self.away_until - time.monotonic()) / 60.0))
         return f"用户可能去{self.away_reason}了，预计还有约 {left} 分钟回来。"
 
+    def adjust_private_mood(self, **changes):
+        for key, delta in changes.items():
+            if key in self.private_mood:
+                self.private_mood[key] = clamp(self.private_mood.get(key, 0.0) + float(delta), 0.0, 100.0)
+
+    def decay_private_mood(self, now=None):
+        now = time.monotonic() if now is None else float(now)
+        elapsed = max(0.0, now - self.last_private_mood_tick_at)
+        if elapsed < 1.0:
+            return
+        minutes = min(30.0, elapsed / 60.0)
+        self.last_private_mood_tick_at = now
+        decay = {
+            "sulk": 0.28,
+            "grudge": 0.06,
+            "jealousy": 0.18,
+            "doubt": 0.14,
+        }
+        for key, amount in decay.items():
+            self.private_mood[key] = max(0.0, self.private_mood.get(key, 0.0) - amount * minutes)
+
+    def observe_idle_private_mood(self, idle_seconds, now=None):
+        now = time.monotonic() if now is None else float(now)
+        self.decay_private_mood(now)
+        if self.is_user_away(now):
+            return None
+        idle_minutes = max(0.0, float(idle_seconds) / 60.0)
+        relation_factor = clamp((self.relationship_score - 45.0) / 110.0, 0.0, 1.0)
+        if idle_minutes < 6.0 or relation_factor <= 0.0:
+            return None
+        if idle_minutes >= 45.0:
+            self.adjust_private_mood(sulk=5.5 + 5.0 * relation_factor, grudge=2.2 + 3.4 * relation_factor, doubt=1.8 + 2.2 * relation_factor)
+        elif idle_minutes >= 18.0:
+            self.adjust_private_mood(sulk=3.6 + 3.8 * relation_factor, grudge=0.8 + 1.6 * relation_factor, doubt=1.0 + 1.8 * relation_factor)
+        elif idle_minutes >= 8.0:
+            self.adjust_private_mood(sulk=1.6 + 2.2 * relation_factor, doubt=0.5 + 0.9 * relation_factor)
+        mood = self.private_mood
+        strongest = max(mood.items(), key=lambda item: item[1])
+        if strongest[1] < 18.0 or now - self.last_idle_mood_note_at < 900.0:
+            return None
+        self.last_idle_mood_note_at = now
+        self.save()
+        if strongest[0] == "grudge":
+            text = "你安静太久了，她有点记在心里，但还在克制，想用一句小别扭的话提醒你她也会在意。"
+        elif strongest[0] == "doubt":
+            text = "你一直没回应，她有点怀疑自己是不是被放在一边了，语气可以小小作一下但不要攻击。"
+        elif strongest[0] == "jealousy":
+            text = "她有一点吃醋和不安，想确认你是不是还把她放在心上，但不要追问隐私。"
+        else:
+            text = "她有点小脾气，想撒娇式地闹一下别扭，让你知道被冷落她会在意。"
+        return {
+            "kind": f"idle_{strongest[0]}",
+            "priority": 1.6 + strongest[1] / 80.0,
+            "text": text,
+        }
+
+    def private_mood_summary(self):
+        self.decay_private_mood()
+        mood = self.private_mood
+        active = [(key, value) for key, value in mood.items() if value >= 8.0]
+        if not active:
+            return ""
+        labels = {
+            "sulk": "小脾气",
+            "grudge": "记仇",
+            "jealousy": "吃醋",
+            "doubt": "怀疑被忽略",
+        }
+        return "，".join(f"{labels.get(key, key)}{value:.0f}" for key, value in sorted(active, key=lambda item: item[1], reverse=True))
+
     def build_prompt_context(self):
         stage, attitude = self.relationship_stage()
         away = self.away_label()
+        private_mood = self.private_mood_summary()
         lines = [
             "你的身份：你叫小日和，是用户的情感陪伴朋友，也有自己的生活和创作习惯。",
             f"你和用户当前社会关系：{stage}，关系分 {self.relationship_score:.1f}。态度基调：{attitude}",
@@ -562,6 +675,10 @@ class PersonaLifeSystem:
         ]
         if away:
             lines.append(away)
+        if private_mood:
+            lines.append(
+                f"当前微妙情绪：{private_mood}。这些情绪会随时间和用户回应慢慢消退；表达时可以小作、小别扭、吃醋或有点记仇，但要像亲密关系里的情绪，不要审问、不要编造事实。"
+            )
         user_profile = getattr(self, "user_profile", None)
         if user_profile is not None:
             try:

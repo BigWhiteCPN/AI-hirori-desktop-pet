@@ -267,6 +267,8 @@ class RoomModeMixin:
                 self.room_activity = selected
                 self.room_activity_started_at = now
                 self.room_last_motion_at = 0.0
+                info = self.room_activity_info()
+                self.show_chat_status(f"小屋状态：{info.get('label', self.room_activity)} - {info.get('detail', '')}", seconds=3.4)
                 print("ROOM_ACTIVITY =", {"activity": self.room_activity})
 
     def room_activity_info(self):

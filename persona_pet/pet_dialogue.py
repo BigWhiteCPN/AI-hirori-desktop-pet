@@ -30,6 +30,8 @@ class PetDialogueMixin:
         self.current_analysis = primary_dominant_analysis(raw_analysis)
         self.mixer.set_target(self.current_analysis.weights)
         if speak:
+            if hasattr(self, "show_chat_status"):
+                self.show_chat_status("测试：角色正在说当前文本。", seconds=2.0)
             self.behavior.set_analysis(
                 self.model,
                 self.current_analysis,
@@ -38,6 +40,8 @@ class PetDialogueMixin:
             )
             self.start_voice_for_text(self.test_text, self.current_analysis, test_key=self.current_test_key)
         else:
+            if hasattr(self, "show_chat_status"):
+                self.show_chat_status("测试：已把当前文本应用为监听情绪。", seconds=2.0)
             self.behavior.set_analysis(
                 self.model,
                 self.current_analysis,
@@ -74,6 +78,9 @@ class PetDialogueMixin:
         self.dialogue_index = 0
         self.next_dialogue_at = 0.0
         self.last_dialogue_emotion = dominant_weight_emotion(self.current_analysis)
+        if hasattr(self, "show_chat_status"):
+            label = "说话者" if role == DIALOGUE_ROLE_SPEAKER else "监听者"
+            self.show_chat_status(f"逐句测试开始：{label}，共 {len(sentences)} 句。", seconds=2.4)
         print(
             "DIALOGUE_START =",
             {
@@ -149,6 +156,8 @@ class PetDialogueMixin:
 
         if self.dialogue_index >= len(self.dialogue_sentences):
             self.dialogue_active = False
+            if hasattr(self, "show_chat_status"):
+                self.show_chat_status("逐句测试已结束。", seconds=2.0)
             print(
                 "DIALOGUE_END =",
                 {
@@ -159,6 +168,9 @@ class PetDialogueMixin:
             return
 
         sentence = self.dialogue_sentences[self.dialogue_index]
+        if hasattr(self, "show_chat_status"):
+            role_label = "说话" if self.dialogue_role == DIALOGUE_ROLE_SPEAKER else "倾听"
+            self.show_chat_status(f"逐句测试：{role_label} {self.dialogue_index + 1}/{len(self.dialogue_sentences)}", seconds=1.6)
         motion_key = self.apply_dialogue_sentence(sentence, self.dialogue_role)
         seconds = estimate_sentence_seconds(sentence, role=self.dialogue_role)
         motion_seconds = min(MOTION_DURATION_SECONDS.get(motion_key, 0.0), 4.2)

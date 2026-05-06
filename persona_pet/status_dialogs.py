@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QDialog, QHBoxLayout, QLabel, QProgressBar, QTextEdi
 
 class MemoryGraphCanvas(QWidget):
     NODE_COLORS = {
+        "脑区": QColor(236, 213, 255),
         "角色": QColor(255, 196, 224),
         "类别": QColor(205, 230, 255),
         "情绪": QColor(255, 222, 168),
@@ -41,6 +42,8 @@ class MemoryGraphCanvas(QWidget):
 
     def node_text_color(self, node):
         node_type = node.get("type", "")
+        if node_type == "脑区":
+            return QColor(83, 58, 124)
         if node_type == "症状":
             return QColor(104, 50, 58)
         if node_type == "情绪":
@@ -134,7 +137,7 @@ class MemoryGraphCanvas(QWidget):
                 forces[right][0] -= fx
                 forces[right][1] -= fy
 
-        for edge in self.dialog.graph.get("edges", []):
+        for edge in self.dialog.visible_edges():
             source = edge.get("source")
             target = edge.get("target")
             if source not in node_set or target not in node_set:
@@ -187,7 +190,7 @@ class MemoryGraphCanvas(QWidget):
             return
 
         node_ids = {node.get("id", "") for node in nodes}
-        for edge in self.dialog.graph.get("edges", []):
+        for edge in self.dialog.visible_edges():
             source = edge.get("source")
             target = edge.get("target")
             if source not in node_ids or target not in node_ids:
@@ -334,6 +337,7 @@ class MemoryGraphCanvas(QWidget):
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
+            self.dialog.exit_module()
             self.layout_nodes(reset=True)
             self.update()
             event.accept()
@@ -355,6 +359,8 @@ class MemoryGraphDialog(QDialog):
         super().__init__(parent)
         self.memory_store = memory_store
         self.graph, self.short_terms, self.long_term = self.memory_store.graph_snapshot()
+        self.brain = self.memory_store.brain_module_snapshot() if hasattr(self.memory_store, "brain_module_snapshot") else {"modules": [], "edges": [], "node_to_module": {}}
+        self.current_module_key = ""
         self.current_node_id = ""
         self.setWindowTitle("脑内记忆地图")
         self.resize(900, 620)
@@ -391,7 +397,7 @@ class MemoryGraphDialog(QDialog):
         title = QLabel("脑内记忆地图")
         title.setObjectName("memoryTitle")
         root.addWidget(title)
-        hint = QLabel("点击关系网里的节点查看细节；紫色思考节点表示她把旧记忆重新解释后形成的新心理内容。")
+        hint = QLabel("先点击脑区模块进入内部；模块内会显示该脑区处理的记忆和联想连线。双击图面返回脑区总览。")
         hint.setObjectName("memoryHint")
         hint.setWordWrap(True)
         root.addWidget(hint)
@@ -407,30 +413,90 @@ class MemoryGraphDialog(QDialog):
 
         self.show_overview()
 
+    def visible_edges(self):
+        if not self.current_module_key:
+            return self.brain.get("edges", [])
+        node_ids = {node.get("id", "") for node in self.important_nodes()}
+        return [
+            edge
+            for edge in self.graph.get("edges", [])
+            if edge.get("source") in node_ids and edge.get("target") in node_ids
+        ]
+
     def important_nodes(self):
+        if not self.current_module_key:
+            return self.brain.get("modules", [])
         nodes = self.graph.get("nodes", {})
         edges = self.graph.get("edges", [])
         connected = {}
         for edge in edges:
             connected[edge.get("source")] = connected.get(edge.get("source"), 0) + int(edge.get("weight", 1))
             connected[edge.get("target")] = connected.get(edge.get("target"), 0) + int(edge.get("weight", 1))
-        type_bonus = {"思考": 8, "心情": 5, "类别": 2}
-        ranked = sorted(
-            nodes.values(),
-            key=lambda node: (
-                type_bonus.get(node.get("type", ""), 0),
-                connected.get(node.get("id"), 0),
-                int(node.get("count", 0)),
-            ),
+
+        def score(node):
+            return (
+                connected.get(node.get("id"), 0) * 2
+                + int(node.get("count", 0))
+            )
+
+        node_to_module = self.brain.get("node_to_module", {})
+        values = [
+            node
+            for node_id, node in nodes.items()
+            if node_to_module.get(node_id) == self.current_module_key
+        ]
+        roles = sorted([node for node in values if node.get("type") == "角色"], key=score, reverse=True)[:3]
+        real_memory = sorted(
+            [node for node in values if node.get("type") in ("记忆", "症状", "情绪")],
+            key=score,
             reverse=True,
-        )
-        return ranked[:34]
+        )[:16]
+        categories = sorted([node for node in values if node.get("type") == "类别"], key=score, reverse=True)[:6]
+        thoughts = sorted([node for node in values if node.get("type") == "思考"], key=score, reverse=True)[:6]
+        moods = sorted([node for node in values if node.get("type") == "心情"], key=score, reverse=True)[:3]
+
+        selected = []
+        seen = set()
+        for group in (roles, real_memory, categories, thoughts, moods):
+            for node in group:
+                node_id = node.get("id", "")
+                if node_id and node_id not in seen:
+                    selected.append(node)
+                    seen.add(node_id)
+        if len(selected) < 34:
+            for node in sorted(values, key=score, reverse=True):
+                node_id = node.get("id", "")
+                if node_id and node_id not in seen:
+                    selected.append(node)
+                    seen.add(node_id)
+                if len(selected) >= 34:
+                    break
+        return selected[:34]
 
     def show_overview(self):
         summary = self.long_term.get("summary", "还没有形成长期记忆。")
         recent = self.short_terms[-5:]
         reflections = [item for item in self.short_terms if item.get("reflection")]
-        lines = [f"长期摘要\n{summary}", "", "思考痕迹"]
+        association = self.memory_store.load_meta_json("last_association", {}) if hasattr(self.memory_store, "load_meta_json") else {}
+        lines = [f"长期摘要\n{summary}", "", "脑区模块"]
+        modules = self.brain.get("modules", [])
+        if not modules:
+            lines.append("暂无脑区模块。对话几轮后，记忆会自动分配到不同脑区。")
+        for module in modules:
+            lines.append(f"- {module.get('label')}：{module.get('count', 0)} 个信号")
+            if module.get("category"):
+                lines.append(f"  {module.get('category')}")
+        lines.append("")
+        lines.append("最近联想链")
+        if isinstance(association, dict) and association.get("steps"):
+            source = association.get("source", "")
+            role = association.get("role", "")
+            lines.append(f"{association.get('time', '')}  {source}/{role}：{association.get('query', '')[:80]}")
+            for step in association.get("steps", [])[:6]:
+                lines.append(f"- {step}")
+        else:
+            lines.append("暂无检索联想。她开始回应或主动表达后这里会出现思考路径。")
+        lines.extend(["", "思考痕迹"])
         if not reflections:
             lines.append("暂无反思记忆。她空闲时会从旧记忆里抽取线索，形成新的想法。")
         for item in reversed(reflections[-5:]):
@@ -451,7 +517,45 @@ class MemoryGraphDialog(QDialog):
                 lines.append(f"  桌宠：{item.get('assistant', '')[:80]}")
         self.detail.setPlainText("\n".join(lines))
 
+    def show_module_overview(self, module_key):
+        self.current_module_key = module_key
+        self.current_node_id = ""
+        modules = {module.get("key"): module for module in self.brain.get("modules", [])}
+        module = modules.get(module_key, {})
+        nodes = self.important_nodes()
+        edge_count = len(self.visible_edges())
+        lines = [
+            module.get("label", module_key),
+            module.get("category", ""),
+            "",
+            f"模块信号：{module.get('count', 0)}",
+            f"内部节点：{len(nodes)}",
+            f"内部连线：{edge_count}",
+            "",
+            "这个脑区会处理：",
+            module.get("details", [""])[0] if module.get("details") else "",
+            "",
+            "点击左侧节点可以看具体记忆；双击图面返回脑区总览。",
+        ]
+        self.detail.setPlainText("\n".join(line for line in lines if line is not None))
+        if hasattr(self, "canvas"):
+            self.canvas.layout_nodes(reset=True)
+            self.canvas.update()
+
+    def exit_module(self):
+        if not self.current_module_key and not self.current_node_id:
+            return
+        self.current_module_key = ""
+        self.current_node_id = ""
+        self.show_overview()
+        if hasattr(self, "canvas"):
+            self.canvas.layout_nodes(reset=True)
+            self.canvas.update()
+
     def focus_node(self, node_id):
+        if str(node_id or "").startswith("脑区:"):
+            self.show_module_overview(str(node_id).split(":", 1)[1])
+            return
         self.current_node_id = node_id
         nodes = self.graph.get("nodes", {})
         node = nodes.get(node_id, {})

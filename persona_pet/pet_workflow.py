@@ -30,18 +30,44 @@ from persona_pet.voicevox import estimate_sentence_seconds
 BARGE_IN_AFTER_PLAYBACK_SECONDS = 0.9
 FREE_TALK_RELISTEN_DELAY = 0.15
 LIFE_WRITING_IDLE_SECONDS = 75.0
-LIFE_WRITING_INTERVAL_SECONDS = (180.0, 360.0)
+LIFE_WRITING_INTERVAL_SECONDS = (150.0, 240.0)
 MEMORY_MAX_TEXT_CHARS = 420
 MEMORY_MIN_SIGNAL_CHARS = 4
 PROACTIVE_ENABLED = True
-PROACTIVE_IDLE_SECONDS = 60.0
-PROACTIVE_INTERVAL_SECONDS = (90.0, 180.0)
+PROACTIVE_IDLE_SECONDS = 120.0
+PROACTIVE_INTERVAL_SECONDS = (180.0, 300.0)
 SELF_NOTE_META_KEY = "self_notes"
 STRUCTURED_REPLY_MARKERS = ('"zh"', '"emotion"', '"segments"', '"prosody"', '"voice_text"')
 VOICE_PLAYBACK_GUARD_SECONDS = 0.25
 
 
 class PetWorkflowMixin:
+    def memory_associate_input(self, text, source="input"):
+        text = (text or "").strip()
+        if not text or not hasattr(self, "memory"):
+            return
+        try:
+            if hasattr(self.memory, "associative_trace"):
+                self.memory.associative_trace(text, source=source, role="input")
+        except Exception as exc:
+            self.runtime_logger("MEMORY_INPUT_ASSOC_ERROR", {"source": source, "error": str(exc)})
+
+    def memory_associate_output(self, text, source="output"):
+        text = collapse_repeated_memory_text(strip_stage_directions(text or ""))
+        if not text or not hasattr(self, "memory"):
+            return
+        now = time.monotonic()
+        last = getattr(self, "_last_memory_output_assoc", None)
+        key = (str(source or "output"), text[:160])
+        if last and last[0] == key and now - float(last[1]) < 2.0:
+            return
+        self._last_memory_output_assoc = (key, now)
+        try:
+            if hasattr(self.memory, "associative_trace"):
+                self.memory.associative_trace(text, source=source, role="output")
+        except Exception as exc:
+            self.runtime_logger("MEMORY_OUTPUT_ASSOC_ERROR", {"source": source, "error": str(exc)})
+
     def submit_chat_input(self):
         text = self.chat_input.text().strip()
         if not text:
@@ -52,6 +78,9 @@ class PetWorkflowMixin:
         text = (text or "").strip()
         if not text:
             return
+        self.last_user_interaction_at = time.monotonic()
+        self.next_proactive_at = self.last_user_interaction_at + random.uniform(*PROACTIVE_INTERVAL_SECONDS)
+        self.memory_associate_input(text, source="user_text")
         if self.handle_file_agent_input(text):
             return
         if self.handle_browser_agent_input(text):
@@ -60,8 +89,6 @@ class PetWorkflowMixin:
             self.show_chat_status("还在思考上一句哦。", seconds=1.8)
             return
 
-        self.last_user_interaction_at = time.monotonic()
-        self.next_proactive_at = self.last_user_interaction_at + random.uniform(*PROACTIVE_INTERVAL_SECONDS)
         self.chat_input.clear()
         self.dialogue_active = False
         user_analysis = primary_dominant_analysis(analyze_text_to_emotion(text))
@@ -228,20 +255,52 @@ class PetWorkflowMixin:
             return False
         note = sorted(self.self_notes, key=lambda item: float(item.get("priority", 1.0)), reverse=True)[0]
         prompt = (
-            "你现在不是被动回答用户，而是想主动表达一个自己的小念头。\n"
+            "你现在不是被动回答用户，而是想主动表达一段自己的深层感受。\n"
             f"用户安静了约{int(idle_seconds)}秒。你的待表达念头：{note.get('text', '')}\n"
-            "只输出一句中文，语气自然、亲近但克制；像真人一样给对方留回应空间，不要解释系统。"
+            "把它整理成一句更细腻的第一人称关系感受、反思总结或温柔但有棱角的观点。"
+            "不要使用固定开头，例如“不过”“其实”“我只是”“我会一直在这里”；不要写成小说旁白或舞台说明。"
+            "不要说倒水、喝水、休息、加油、我在这里这类浅层照顾句；不要解释系统。"
+            "只输出一句中文，语气自然、亲近但克制，尽量不用问句。"
         )
+        if hasattr(self.memory, "associative_trace"):
+            self.memory.associative_trace(prompt, source="self_note", role="output_plan")
+        self.show_chat_status("她正在整理一段想主动说的深层感受。", seconds=2.2)
         if not self.chat.ask_async(prompt, initiated_by="proactive", memory_user_text="桌宠主动行动：self_expression"):
             return False
         self.self_notes.remove(note)
         self.save_self_notes()
-        self.drive.record_intent("self_expression", "主动表达自己的计划或刚完成的事情", score=note.get("priority"))
+        self.drive.record_intent("self_expression", "主动表达深层感受或关系反思", score=note.get("priority"))
         self.drive.last_action_type = "self_expression"
         self.drive.save()
         self.next_proactive_at = time.monotonic() + random.uniform(*PROACTIVE_INTERVAL_SECONDS)
         print("PROACTIVE_SELF_NOTE =", {"kind": note.get("kind"), "text": note.get("text")})
         return True
+
+    def is_life_writing_due(self, now=None):
+        now = time.monotonic() if now is None else now
+        idle_seconds = now - self.last_user_interaction_at
+        if self.free_talk_enabled and idle_seconds < 300.0 and not self.life.is_user_away(now):
+            return False
+        if now < self.life.next_writing_at:
+            return False
+        if self.drive.values.get("energy", 0.0) < 35.0 or now < self.drive.proactive_backoff_until:
+            return False
+        if idle_seconds < LIFE_WRITING_IDLE_SECONDS and not self.life.is_user_away(now):
+            return False
+        if self.life.needs_diary():
+            return True
+        return self.life.should_write_novel()
+
+    def maybe_queue_idle_private_note(self, idle_seconds, now=None):
+        if not hasattr(self.life, "observe_idle_private_mood"):
+            return
+        note = self.life.observe_idle_private_mood(idle_seconds, now=now)
+        if not note:
+            return
+        kind = note.get("kind", "idle_sulk")
+        if any(item.get("kind") == kind for item in self.self_notes):
+            return
+        self.add_self_note(note.get("text", ""), kind=kind, priority=float(note.get("priority", 1.4)))
 
     def maybe_start_proactive_chat(self):
         if not PROACTIVE_ENABLED:
@@ -255,9 +314,20 @@ class PetWorkflowMixin:
             self.next_proactive_at = now + 30.0
             return
         idle_seconds = now - self.last_user_interaction_at
+        if self.is_life_writing_due(now):
+            self.next_proactive_at = now + 120.0
+            return
+        self.maybe_queue_idle_private_note(idle_seconds, now=now)
         if self.maybe_start_self_note(idle_seconds):
             return
-        action = self.drive.choose_proactive_action(idle_seconds)
+        recent_memories = []
+        if hasattr(self.memory, "recent_user_memory_snippets"):
+            recent_memories = self.memory.recent_user_memory_snippets(limit=3)
+        action = self.drive.choose_proactive_action(
+            idle_seconds,
+            recent_memories=recent_memories,
+            writing_due=self.is_life_writing_due(now),
+        )
         if not action:
             self.next_proactive_at = now + 45.0
             return
@@ -268,11 +338,14 @@ class PetWorkflowMixin:
             except Exception:
                 pass
             self.drive.on_silent_motion(action.get("type", "silent_motion"))
+            self.show_chat_status("她决定先安静陪着你。", seconds=2.4)
             self.next_proactive_at = now + random.uniform(90.0, 180.0)
             print("PROACTIVE_SILENT =", action)
             return
 
         prompt = action.get("prompt", "")
+        if hasattr(self.memory, "associative_trace"):
+            self.memory.associative_trace(prompt or action.get("memory_user_text") or "主动表达", source="proactive", role="output_plan")
         self.show_chat_status("她好像想主动说点什么。", seconds=2.0)
         self.drive.record_intent(action.get("type", "proactive"), "内驱评分触发主动发言", score=action.get("score"))
         self.drive.last_action_type = action.get("type", "proactive")
@@ -282,7 +355,10 @@ class PetWorkflowMixin:
             initiated_by="proactive",
             memory_user_text=action.get("memory_user_text") or "桌宠主动关心用户",
         )
-        self.next_proactive_at = now + random.uniform(*PROACTIVE_INTERVAL_SECONDS)
+        interval = random.uniform(*PROACTIVE_INTERVAL_SECONDS)
+        if idle_seconds >= 600.0:
+            interval += random.uniform(240.0, 420.0)
+        self.next_proactive_at = now + interval
         print("PROACTIVE_CHAT =", {"action": action.get("type"), "score": action.get("score"), "prompt": prompt})
 
     def process_speech_events(self):
@@ -297,6 +373,8 @@ class PetWorkflowMixin:
                 continue
             raw_text = event.text.strip()
             text = clean_speech_input_text(raw_text)
+            if raw_text:
+                self.memory_associate_input(raw_text, source="speech_raw")
             if not self.free_talk_enabled:
                 self.chat_input.clear()
             print(
@@ -337,6 +415,7 @@ class PetWorkflowMixin:
                 self.drive.on_llm_result(success=True, initiated_by=event.initiated_by)
 
             reply = event.reply
+            self.memory_associate_output(reply, source=f"assistant_{event.initiated_by}")
             self.chat_status_text = ""
             self.test_text = reply
             self.current_test_key = None
@@ -418,16 +497,18 @@ class PetWorkflowMixin:
     def process_life_writing_events(self):
         for event in self.life_writer.consume_events():
             if event.error:
+                self.memory_associate_output("写作失败，稍后再试。", source=f"life_writing_{event.kind}")
                 self.show_chat_status("写作失败，稍后再试。", seconds=3.0)
                 print("LIFE_WRITING_ERROR =", {"kind": event.kind, "error": event.error})
                 self.life.next_writing_at = time.monotonic() + 120.0
                 continue
             label = "日记" if event.kind == "diary" else "小说"
+            self.memory_associate_output(f"小日和写完了一段{label}：{event.title}", source=f"life_writing_{event.kind}")
             self.show_chat_status(f"小日和写完了一段{label}。", seconds=4.0)
             self.drive.record_intent(f"write_{event.kind}", f"作为小说作家完成{label}写作")
             self.drive.save()
             self.add_self_note(
-                "刚完成了一点自己的事情，心情稍微轻了一些。想自然地和用户说一句，不要提写作内容，除非用户主动问。",
+                "刚完成一段写作后，她想把这件事沉淀成一句更深的感受：创作让她觉得自己不是只在等待用户，也在慢慢长出自己的内心。",
                 kind=f"write_{event.kind}",
                 priority=1.2,
             )
@@ -441,12 +522,18 @@ class PetWorkflowMixin:
         now = time.monotonic()
         if now < self.life.next_writing_at:
             return
+        idle_seconds = now - self.last_user_interaction_at
         if self.free_talk_enabled:
-            return
+            if idle_seconds < 300.0 and not self.life.is_user_away(now):
+                return
+            self.free_talk_enabled = False
+            self.free_talk_next_at = 0.0
+            self.barge_in.stop()
+            self.show_chat_status("她先去写点东西。", seconds=3.0)
         if self.drive.values.get("energy", 0.0) < 35.0 or time.monotonic() < self.drive.proactive_backoff_until:
             self.life.next_writing_at = now + 300.0
             return
-        if now - self.last_user_interaction_at < LIFE_WRITING_IDLE_SECONDS and not self.life.is_user_away(now):
+        if idle_seconds < LIFE_WRITING_IDLE_SECONDS and not self.life.is_user_away(now):
             return
         if (
             self.speech_input.is_busy()
@@ -462,7 +549,8 @@ class PetWorkflowMixin:
             self.life.next_writing_at = now + 1800.0
             return
         if self.life_writer.write_async(kind):
-            self.show_chat_status("小日和正在写日记。" if kind == "diary" else "小日和正在写小说。", seconds=12.0)
+            self.memory_associate_output("小日和正在写日记。" if kind == "diary" else "小日和正在写小说。", source="life_writing_start")
+            self.show_chat_status("小日和正在写日记。" if kind == "diary" else "小日和正在写小说。", seconds=18.0)
             self.life.next_writing_at = now + 600.0
             print("LIFE_WRITING_START =", {"kind": kind})
 
@@ -480,6 +568,7 @@ class PetWorkflowMixin:
         emotion = emotion_override if emotion_override in LLM_EMOTIONS else dominant_weight_emotion(analysis)
         voice_text = strip_stage_directions(voice_text_override or text or "") or "嗯嗯，我在听哦。"
         text = strip_stage_directions(text)
+        self.memory_associate_output(text or voice_text, source="voice_output")
         if voice_segments:
             voice_segments = [
                 {

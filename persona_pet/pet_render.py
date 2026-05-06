@@ -50,6 +50,8 @@ class PetRenderMixin:
             self.show_chat_status("Live2D 加载失败，查看 logs/persona_pet.log", seconds=8.0)
 
     def show_subtitle(self, text, voice_text="", duration=None):
+        if hasattr(self, "memory_associate_output"):
+            self.memory_associate_output(text, source="subtitle")
         if not self.subtitles_enabled:
             self.subtitle_text = ""
             self.subtitle_voice_text = ""
@@ -78,6 +80,8 @@ class PetRenderMixin:
         )
 
     def show_chat_status(self, text, seconds=2.6):
+        if hasattr(self, "memory_associate_output"):
+            self.memory_associate_output(text, source="status")
         self.chat_status_text = text
         self.chat_status_until = time.monotonic() + seconds
         if hasattr(self, "heart_status_bar"):

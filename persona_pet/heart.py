@@ -304,6 +304,11 @@ class PersonaHeart:
         thought = self.state.get("thought") or ""
         mood = self.state.get("mood") or "安静观察"
         focus = self.state.get("focus_memory_text") or ""
+        association = {}
+        try:
+            association = self.memory_store.load_meta_json("last_association", {})
+        except Exception:
+            association = {}
         return {
             "personality": copy.deepcopy(INFP_PERSONALITY),
             "mood": mood,
@@ -314,6 +319,7 @@ class PersonaHeart:
             "arousal": self.state.get("arousal", 0.0),
             "status_text": f"心情：{mood} | INFP | {thought}",
             "last_reflection_wall": self.state.get("last_reflection_wall", ""),
+            "association": association if isinstance(association, dict) else {},
             "body": self.physiology.snapshot() if self.physiology is not None else {},
         }
 
@@ -363,6 +369,10 @@ class HeartStatusBar(QLabel):
         visible_text = " | ".join(visible_parts)
         self.setText(self.fontMetrics().elidedText(visible_text, Qt.ElideRight, available))
         personality = snapshot["personality"]
+        association = snapshot.get("association", {})
+        association_text = ""
+        if isinstance(association, dict) and association.get("steps"):
+            association_text = "\n最近联想：\n" + "\n".join(f"- {step}" for step in association.get("steps", [])[:4])
         self.setToolTip(
             f"MBTI：{personality['mbti']} {personality['name']}\n"
             f"性格：{personality['core']}\n"
@@ -370,6 +380,7 @@ class HeartStatusBar(QLabel):
             f"当前心情：{snapshot['mood']}\n"
             f"生理状态：{snapshot.get('body', {}).get('summary', '未同步')}\n"
             f"内心活动：{snapshot['thought']}"
+            f"{association_text}"
         )
 
 

@@ -167,6 +167,40 @@ class PetInteractionMixin:
         self.show_chat_status(f"亲密作弊码已生效：{stage}阶段", seconds=4.0)
         print("INTIMACY_CHEAT =", {"stage": stage, "relationship_score": self.life.relationship_score})
 
+    def refill_energy_cheat(self):
+        self.drive.values["energy"] = 100.0
+        self.drive.values["security"] = max(self.drive.values.get("security", 0.0), 76.0)
+        self.drive.values["purpose"] = max(self.drive.values.get("purpose", 0.0), 70.0)
+        self.drive.values["attachment_need"] = min(self.drive.values.get("attachment_need", 0.0), 24.0)
+        self.drive.record_intent("cheat_refill_energy", "用户按下能量作弊码，直接恢复到满能量")
+        self.drive.save()
+        if hasattr(self, "physiology"):
+            self.physiology.values["fatigue"] = 0.0
+            self.physiology.values["sleepiness"] = 0.0
+            self.physiology.values["stress"] = min(self.physiology.values.get("stress", 0.0), 6.0)
+            self.physiology.values["hunger"] = min(self.physiology.values.get("hunger", 0.0), 8.0)
+            self.physiology.values["thirst"] = min(self.physiology.values.get("thirst", 0.0), 8.0)
+            self.physiology.values["comfort"] = max(self.physiology.values.get("comfort", 0.0), 92.0)
+            self.physiology.values["closeness_need"] = min(self.physiology.values.get("closeness_need", 0.0), 20.0)
+            self.physiology.save()
+        feedback = random.choice(
+            [
+                "能量回满了。现在脑袋清醒很多，可以继续陪你，也可以继续写作。",
+                "作弊码生效，电量满格。感觉我又能认真做自己的事了。",
+                "恢复完成。刚才有点累的地方都被按掉了，现在状态很好。",
+            ]
+        )
+        self.speak_interaction_feedback(feedback, emotion="joy")
+        self.interaction_memory_add(
+            "用户按下能量作弊码，直接把小日和的能量恢复到满值",
+            feedback,
+            emotion="joy",
+            max_daily_count=3,
+            count=1,
+        )
+        self.show_chat_status("能量作弊码已生效：能量 100/100", seconds=4.0)
+        print("ENERGY_CHEAT =", {"energy": self.drive.values.get("energy"), "physiology": getattr(self, "physiology", None).snapshot() if hasattr(self, "physiology") else {}})
+
 
     def interact_with_pet(self, kind):
         result = self.life.interact(kind)

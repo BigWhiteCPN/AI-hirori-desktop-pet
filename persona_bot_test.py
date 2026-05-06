@@ -631,11 +631,15 @@ class Live2DDesktopPet(
         if event.key() == Qt.Key_P and not (event.modifiers() & Qt.ShiftModifier):
             self.unlock_intimacy_cheat()
             return
+        if event.key() == Qt.Key_E and event.modifiers() & Qt.ShiftModifier:
+            self.refill_energy_cheat()
+            return
         if event.key() == Qt.Key_N:
             self.stop_free_talk()
             return
         if event.key() == Qt.Key_F3:
             self.open_api_settings_dialog()
+            self.show_chat_status("已打开 API 设置面板。", seconds=2.0)
             return
 
         if self.chat_input.hasFocus():
@@ -643,12 +647,14 @@ class Live2DDesktopPet(
             return
 
         if event.key() == Qt.Key_Escape:
+            self.show_chat_status("正在退出桌宠。", seconds=1.2)
             self.close()
             return
 
         if event.key() == Qt.Key_C:
             self.chat_input.setFocus()
             self.chat_input.selectAll()
+            self.show_chat_status("输入框已聚焦，可以直接打字。", seconds=2.0)
             return
 
         if event.key() == Qt.Key_O:
@@ -664,35 +670,43 @@ class Live2DDesktopPet(
 
         if event.key() == Qt.Key_S:
             self.open_api_settings_dialog()
+            self.show_chat_status("已打开 API 设置面板。", seconds=2.0)
             return
 
         if event.key() in TEST_TEXTS:
             self.dialogue_active = False
             self.current_test_key = event.key()
             self.test_text = TEST_TEXTS[event.key()]
+            self.show_chat_status(f"测试文本已切换到 {event.text() or event.key()}。", seconds=2.0)
             print("TEXT =", self.test_text)
             return
 
         if event.key() == Qt.Key_Space:
+            self.show_chat_status("已切换当前测试情绪。", seconds=1.8)
             self.apply_current_text(speak=False)
             return
 
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.show_chat_status("正在播放当前测试文本。", seconds=2.0)
             self.apply_current_text(speak=True)
             return
 
         if event.key() == Qt.Key_L:
+            self.show_chat_status("开始监听者逐句测试。", seconds=2.0)
             self.start_dialogue_test(DIALOGUE_ROLE_LISTENER)
             return
 
         if event.key() == Qt.Key_P and event.modifiers() & Qt.ShiftModifier:
+            self.show_chat_status("开始说话者逐句测试。", seconds=2.0)
             self.start_dialogue_test(DIALOGUE_ROLE_SPEAKER)
             return
 
         if event.key() == Qt.Key_R and self.model is not None:
             try:
                 self.model.StartMotion("Idle", random.randrange(max(1, self.motion_groups.get("Idle", 1))), 1)
+                self.show_chat_status("已触发随机待机动作。", seconds=1.8)
             except Exception:
+                self.show_chat_status("随机动作触发失败。", seconds=2.0)
                 pass
             return
 
@@ -865,6 +879,7 @@ def main():
     print("按 SPACE 只切换情绪，按 ENTER 模拟角色说这句话。")
     print("按 L 把当前文本当作用户说话逐句监听，按 P 把当前文本当作角色自己逐句说话。")
     print("按 V 开启自由语音对话，按 N 关闭自由语音对话；按 B 打开脑内记忆地图，按 M 打开角色状态面板，按 G 截图聊天记录出主意；按 F2 也可以开启（输入框聚焦时可用）。")
+    print("作弊键：P 直接最高亲密，Shift+E 直接回满能量。")
     print("右键角色打开 API 设置面板；输入框未聚焦时也可以按 F3 或 S。")
     print("顶部输入框仍保留为备用：输入文字并回车发送给大模型。按 C 聚焦输入框。")
     print(f"LLM 配置文件：{LLM_CONFIG_PATH}")

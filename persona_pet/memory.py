@@ -22,6 +22,52 @@ STRUCTURED_REPLY_MARKERS = ('"zh"', '"emotion"', '"segments"', '"prosody"', '"vo
 DEFAULT_MEMORY_MAX_TEXT_CHARS = 420
 DEFAULT_MEMORY_MIN_SIGNAL_CHARS = 4
 DEFAULT_MEMORY_SHORT_TERM_LIMIT = 300
+LAST_ASSOCIATION_META_KEY = "last_association"
+
+BRAIN_MODULES = {
+    "relation": {
+        "label": "关系脑区",
+        "detail": "用户、桌宠、社交关系、偏好和亲密距离。",
+        "types": {"角色"},
+        "categories": {"社交", "偏好"},
+    },
+    "emotion": {
+        "label": "情绪脑区",
+        "detail": "情绪、心情、被冷落后的感受和语气倾向。",
+        "types": {"情绪", "心情"},
+        "categories": {"情绪", "心理状态"},
+    },
+    "event": {
+        "label": "事件脑区",
+        "detail": "发生过的事、计划、行为和时间线。",
+        "types": {"记忆"},
+        "categories": {"事件", "行为"},
+    },
+    "needs": {
+        "label": "需求脑区",
+        "detail": "身体、生理需求、饮食、健康和照顾线索。",
+        "types": {"症状"},
+        "categories": {"医疗健康", "饮食"},
+    },
+    "creation": {
+        "label": "创作脑区",
+        "detail": "日记、小说、自我表达和长期创作目标。",
+        "types": set(),
+        "categories": {"写作", "创作", "自我反思"},
+    },
+    "reflection": {
+        "label": "反思脑区",
+        "detail": "她把旧记忆重新解释后形成的新想法。",
+        "types": {"思考"},
+        "categories": {"被反思的记忆"},
+    },
+    "concept": {
+        "label": "概念脑区",
+        "detail": "类别、关键词和还没归档的概念节点。",
+        "types": {"类别"},
+        "categories": {"未归档", "日常对话"},
+    },
+}
 
 PROSODY_TONE_ALIASES = {
     "gentle": "soft",
@@ -824,8 +870,145 @@ class PersonaMemoryStore:
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return [item for _score, item in scored[:limit]]
 
+    def node_module_key(self, node):
+        node_type = str(node.get("type") or "")
+        category_text = str(node.get("category") or "")
+        label_text = str(node.get("label") or "")
+        categories = {part.strip() for part in re.split(r"[,/，、\s]+", category_text) if part.strip()}
+        text = f"{category_text} {label_text}"
+        if node_type == "思考" or "自我反思" in text or "被反思" in text:
+            return "reflection"
+        if any(word in text for word in ("小说", "日记", "写作", "创作", "稿子")):
+            return "creation"
+        for key, module in BRAIN_MODULES.items():
+            if node_type in module.get("types", set()):
+                return key
+            if categories & module.get("categories", set()):
+                return key
+        return "concept"
+
+    def brain_module_snapshot(self):
+        with self.lock:
+            graph = copy.deepcopy(self.data.get("graph", {"nodes": {}, "edges": []}))
+        nodes = graph.get("nodes", {})
+        module_data = {
+            key: {
+                "id": f"脑区:{key}",
+                "key": key,
+                "type": "脑区",
+                "label": module["label"],
+                "category": module["detail"],
+                "count": 0,
+                "details": [module["detail"]],
+                "last_seen": "",
+                "node_ids": [],
+            }
+            for key, module in BRAIN_MODULES.items()
+        }
+        node_to_module = {}
+        for node_id, node in nodes.items():
+            key = self.node_module_key(node)
+            node_to_module[node_id] = key
+            module = module_data[key]
+            module["count"] += max(1, int(node.get("count", 1)))
+            module["node_ids"].append(node_id)
+            if str(node.get("last_seen") or "") > str(module.get("last_seen") or ""):
+                module["last_seen"] = node.get("last_seen", "")
+        edge_map = {}
+        for edge in graph.get("edges", []):
+            source_module = node_to_module.get(edge.get("source"))
+            target_module = node_to_module.get(edge.get("target"))
+            if not source_module or not target_module or source_module == target_module:
+                continue
+            pair = tuple(sorted((source_module, target_module)))
+            item = edge_map.setdefault(
+                pair,
+                {
+                    "source": f"脑区:{pair[0]}",
+                    "target": f"脑区:{pair[1]}",
+                    "relation": "协同",
+                    "weight": 0,
+                    "detail": "",
+                    "last_seen": "",
+                },
+            )
+            item["weight"] += int(edge.get("weight", 1))
+            if edge.get("detail"):
+                item["detail"] = edge.get("detail", "")[:120]
+            if str(edge.get("last_seen") or "") > str(item.get("last_seen") or ""):
+                item["last_seen"] = edge.get("last_seen", "")
+        modules = [module for module in module_data.values() if module.get("node_ids")]
+        modules.sort(key=lambda item: (int(item.get("count", 0)), item.get("last_seen", "")), reverse=True)
+        for left, right in zip(modules, modules[1:]):
+            pair = tuple(sorted((left.get("key", ""), right.get("key", ""))))
+            if not pair[0] or not pair[1] or pair in edge_map:
+                continue
+            edge_map[pair] = {
+                "source": f"脑区:{pair[0]}",
+                "target": f"脑区:{pair[1]}",
+                "relation": "互相影响",
+                "weight": 1,
+                "detail": "脑区之间会在检索、表达和反思时互相激活。",
+                "last_seen": max(str(left.get("last_seen") or ""), str(right.get("last_seen") or "")),
+            }
+        return {"modules": modules, "edges": list(edge_map.values()), "node_to_module": node_to_module}
+
+    def associative_trace(self, query, memories=None, source="memory", role="input"):
+        memories = list(memories or self.retrieve(query, limit=4))
+        query_categories = self.classify(query)
+        steps = []
+        if query_categories:
+            steps.append(f"输入归类到：{' / '.join(query_categories[:3])}")
+        for item in memories[:4]:
+            cats = " / ".join(item.get("categories", [])[:2]) or "日常"
+            text = collapse_repeated_memory_text(strip_stage_directions(item.get("user", "") or item.get("assistant", "")))
+            if text:
+                steps.append(f"联想到[{cats}]：{text[:70]}")
+        if not memories:
+            steps.append("没有命中旧记忆，先用当前语气和关系状态回应。")
+        trace = {
+            "time": memory_now_label(),
+            "source": str(source or "memory")[:40],
+            "role": str(role or "input")[:24],
+            "query": str(query or "")[:160],
+            "steps": steps[:6],
+            "memory_ids": [item.get("id", "") for item in memories[:4] if item.get("id")],
+        }
+        self.save_meta_json(LAST_ASSOCIATION_META_KEY, trace)
+        return trace
+
+    def recent_user_memory_snippets(self, limit=4, max_chars=90):
+        """Return real non-reflection memories for proactive prompts."""
+        with self.lock:
+            items = list(self.data.get("short_terms", []))
+        snippets = []
+        for item in reversed(items):
+            if item.get("reflection"):
+                continue
+            user = collapse_repeated_memory_text(strip_stage_directions(item.get("user", "")))
+            assistant = collapse_repeated_memory_text(strip_stage_directions(item.get("assistant", "")))
+            if user.startswith("桌宠主动行动") or user.startswith("桌宠主动关心用户"):
+                continue
+            if not user and not assistant:
+                continue
+            text = user or assistant
+            if len(text) > max_chars:
+                text = text[:max_chars].rstrip() + "..."
+            snippets.append(
+                {
+                    "id": item.get("id", ""),
+                    "created_at": item.get("created_at", ""),
+                    "categories": list(item.get("categories", [])),
+                    "text": text,
+                }
+            )
+            if len(snippets) >= int(limit):
+                break
+        return snippets
+
     def build_prompt_context(self, query):
         memories = self.retrieve(query, limit=4)
+        association = self.associative_trace(query, memories=memories)
         boundary_query = is_intimate_boundary_query(query)
         with self.lock:
             summary = self.data.get("long_term", {}).get("summary", "")
@@ -846,9 +1029,13 @@ class PersonaMemoryStore:
             lines.append(
                 f"短期记忆{index}（{cats}）：用户说“{item.get('user', '')[:70]}”，你回应“{item.get('assistant', '')[:70]}”。"
             )
+        if association.get("steps"):
+            lines.append("本次联想链：先参考这些线索，再自然组织语言，不要机械复述。")
+            for step in association.get("steps", [])[:4]:
+                lines.append(f"- {step}")
         if not lines:
             return ""
-        return "以下是可参考的记忆，只在相关时自然使用，不要生硬复述：\n" + "\n".join(lines[:6])
+        return "以下是可参考的记忆，只在相关时自然使用，不要生硬复述：\n" + "\n".join(lines[:10])
 
     def graph_snapshot(self):
         with self.lock:
