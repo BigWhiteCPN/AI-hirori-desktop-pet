@@ -4,15 +4,23 @@ __pycache__/
 *.pyo
 
 # Local secrets and machine-specific config
-persona_llm_config.json
+persona_llm_config*.json
+!persona_llm_config.release.json
 .env
 .env.*
+!.env.example
 
 # Runtime-generated data
 logs/
 outputs/
 user_data_backups/
+reports/
+Microsoft/
 *.log
+*.jsonl
+*.db
+*.sqlite
+*.sqlite3
 *.wav
 *.mp3
 *.docx

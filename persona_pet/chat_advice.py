@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QPushBut
 
 from persona_pet.llm_client import LLMClient
 from persona_pet.memory import compact_text
+from persona_pet.runtime import get_default_runtime
 
 
 @dataclass
@@ -19,11 +20,12 @@ class ChatAdviceEvent:
 
 
 class ChatAdviceController:
-    def __init__(self, config=None, memory_store=None, client_kwargs=None, default_config=None):
+    def __init__(self, config=None, memory_store=None, client_kwargs=None, default_config=None, runtime=None):
         self.default_config = dict(default_config or {})
         self.client_kwargs = dict(client_kwargs or {})
         self.config = dict(config or self.default_config)
         self.memory_store = memory_store
+        self.runtime = runtime or get_default_runtime()
         self.client = LLMClient(config=self.config, memory_store=memory_store, **self.client_kwargs)
         self.lock = threading.Lock()
         self.busy = False
@@ -31,6 +33,7 @@ class ChatAdviceController:
 
     def update_config(self, config):
         self.config = dict(config or self.default_config)
+        self.runtime.emit("chat_advice.config_updated", {"provider": self.config.get("provider", "")})
         self.client = LLMClient(config=self.config, memory_store=self.memory_store, **self.client_kwargs)
 
     def is_busy(self):
@@ -46,18 +49,31 @@ class ChatAdviceController:
         def worker():
             event = ChatAdviceEvent(screenshot_path=screenshot_path)
             try:
+                self.runtime.emit("chat_advice.start", {"screenshot_path": screenshot_path})
                 event.ocr_text = self.ocr_image(screenshot_path)
                 if len(compact_text(event.ocr_text)) < 8:
                     raise RuntimeError("OCR 没有识别到足够的聊天文字。请把聊天窗口放大一点，或确认截图里有文字。")
                 event.advice = self.ask_advice(event.ocr_text)
                 event.copy_reply = self.extract_copy_reply(event.advice)
+                self.runtime.emit(
+                    "chat_advice.done",
+                    {"ocr_chars": len(event.ocr_text or ""), "advice_chars": len(event.advice or "")},
+                )
             except Exception as exc:
                 event.error = str(exc)
+                self.runtime.emit("chat_advice.error", {"error": event.error}, level="error")
             with self.lock:
                 self.busy = False
                 self.events.append(event)
 
-        threading.Thread(target=worker, daemon=True).start()
+        self.runtime.run_background(
+            "chat_advice",
+            worker,
+            kind="tool",
+            payload={"screenshot_path": screenshot_path},
+            resources=("ocr", "llm"),
+            timeout=240,
+        )
         return True
 
     def consume_events(self):
@@ -99,10 +115,9 @@ class ChatAdviceController:
         if self.memory_store is not None:
             memory_context = self.memory_store.build_prompt_context(ocr_text)
         system = (
-            "你是桌宠的聊天记录顾问。用户给你一张聊天记录 OCR 文本，"
-            "你要像亲近用户但有边界感的朋友一样分析。"
-            "只根据 OCR 和记忆上下文判断，不要编造事实；不要替用户操控别人；"
-            "涉及感情、人际冲突时，要具体、温柔、可执行。"
+            "你是小日和在阅读聊天截图时的一种思考视角。"
+            "请结合 OCR 文本、记忆和对用户的理解，像亲近的朋友一样给出观察、可能的情绪脉络和可尝试的回应。"
+            "如果信息不足，就把不确定性说清楚；建议要具体、温和、尊重对话双方。"
         )
         user = (
             f"{memory_context}\n\n"

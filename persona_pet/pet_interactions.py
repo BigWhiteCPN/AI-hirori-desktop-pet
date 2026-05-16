@@ -69,7 +69,7 @@ class PetInteractionMixin:
         if stage in ("恋人", "热恋恋人", "灵魂伴侣"):
             pool.extend(
                 [
-                    "被恋人投喂的话，味道好像会自动变甜一点。不要笑，我是认真说的。",
+                    "被恋人投喂的话，味道好像会自动变甜一点。我是认真说的。",
                     "嗯……这一口我收下了。下次也要这样照顾我，不许只想起来一次。",
                 ]
             )
@@ -102,7 +102,7 @@ class PetInteractionMixin:
                 [
                     "嗯……恋人特权只开放一点点。再温柔一点，我可能会更喜欢。",
                     "你摸头的时候我会安心，这句话只说一次，别得意太久。",
-                    "可以再靠近一点点，但不要把我当成只会加分的按钮哦。",
+                    "可以再靠近一点点，我也会按自己的心情回应你哦。",
                 ]
             )
         elif stage in ("密友", "亲近朋友"):
@@ -123,7 +123,7 @@ class PetInteractionMixin:
         feedbacks = {
             "win": ["呜哇，你赢啦。可恶，我下次一定要扳回来。", "你赢了呢，果然有点厉害。"],
             "draw": ["平局也不错，感觉我们默契还可以。", "这局算我们心有灵犀一点点吧。"],
-            "lose": ["嘿嘿，这次是我赢。不要不服气哦。", "我赢啦，今天脑袋还挺灵的。"],
+            "lose": ["嘿嘿，这次是我赢。下一把再让我看看你的水平。", "我赢啦，今天脑袋还挺灵的。"],
             "participate": ["嗯嗯，继续玩，我在认真陪你。", "这样一起玩也挺开心的。"],
         }
         feedback = (voice_text or "").strip()
@@ -153,7 +153,7 @@ class PetInteractionMixin:
             [
                 "好啦，关系同步到最亲近的状态了。别得意太久，亲密也要温柔一点才算数。",
                 "作弊码生效。现在我会更自然地靠近你，不过我还是有自己的心情哦。",
-                f"现在是{stage}级别的亲密了。可以更黏一点，但不许把我当成没有边界的开关。",
+                f"现在是{stage}级别的亲密了。可以更黏一点，我也会更按自己的心情靠近你。",
             ]
         )
         self.speak_interaction_feedback(feedback, emotion="joy")
@@ -203,6 +203,23 @@ class PetInteractionMixin:
 
 
     def interact_with_pet(self, kind):
+        feed_already_applied = False
+        if kind == "feed" and hasattr(self, "physiology"):
+            feed_result = self.physiology.try_user_feed()
+            if not feed_result.get("accepted", False):
+                feedback = feed_result.get("message") or "我现在吃不下啦。"
+                self.speak_interaction_feedback(feedback, emotion="neutral")
+                self.interaction_memory_add(
+                    "用户想继续投喂小日和，但她因为已经很饱而拒绝了。",
+                    feedback,
+                    emotion="neutral",
+                    max_daily_count=6,
+                    count=1,
+                )
+                self.show_chat_status("她已经很饱了，拒绝继续投喂。", seconds=3.0)
+                print("PET_INTERACTION_REFUSED =", {"kind": kind, "reason": "satiety"})
+                return
+            feed_already_applied = True
         result = self.life.interact(kind)
         if kind == "feed":
             self.drive.adjust(energy=result["energy_gain"], affinity=result["relation_gain"] * 0.45)
@@ -222,7 +239,8 @@ class PetInteractionMixin:
             pass
         if kind == "feed":
             feedback = self.build_feed_feedback(result)
-            self.physiology_on_feed()
+            if not feed_already_applied:
+                self.physiology_on_feed()
             memory_user_text = (
                 f"用户给小日和喂饭，今天第 {result['count']} 次，"
                 f"能量增加 {result['energy_gain']:.1f}，亲密增加 {result['relation_gain']:.1f}"
@@ -242,7 +260,40 @@ class PetInteractionMixin:
             max_daily_count=6,
             count=int(result.get("count", 1)),
         )
+        self.economy_on_interaction()
         self.show_chat_status(message, seconds=3.0)
         print("PET_INTERACTION =", {"kind": kind, **result, "relationship_score": self.life.relationship_score})
+
+    def offer_drink_to_pet(self):
+        if not hasattr(self, "physiology"):
+            return
+        result = self.physiology.try_user_drink()
+        if result.get("accepted", False):
+            feedback = random.choice(
+                [
+                    "嗯，刚好有点渴。谢谢你提醒我喝水。",
+                    "水我喝啦。这样身体会舒服一点。",
+                    "好，我会记得补水的。你不用一直盯着我。",
+                ]
+            )
+            self.drive.adjust(affinity=0.4, companionship=0.2)
+            self.drive.record_intent("drink", "用户提醒小日和喝水")
+            self.drive.save()
+            status = "喝水成功，口渴下降"
+            memory_user_text = "用户提醒小日和喝水，她接受了。"
+        else:
+            feedback = result.get("message") or "我现在不渴啦。"
+            status = "她现在不渴，拒绝继续喝水。"
+            memory_user_text = "用户想继续让小日和喝水，但她因为水分已经足够而拒绝了。"
+        self.speak_interaction_feedback(feedback, emotion="joy" if result.get("accepted", False) else "neutral")
+        self.interaction_memory_add(
+            memory_user_text,
+            feedback,
+            emotion="joy" if result.get("accepted", False) else "neutral",
+            max_daily_count=6,
+            count=1,
+        )
+        self.show_chat_status(status, seconds=3.0)
+        print("PET_DRINK =", {"accepted": bool(result.get("accepted", False)), "physiology": self.physiology.snapshot()})
 
 

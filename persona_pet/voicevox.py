@@ -12,15 +12,36 @@ import urllib.error
 import urllib.request
 import uuid
 import wave
+import queue
 from dataclasses import dataclass
 
-from persona_pet.memory import compact_text, contains_any, normalize_prosody_hint, strip_stage_directions
+import numpy as np
 
-DIALOGUE_ROLE_LISTENER = "listener"
-DIALOGUE_ROLE_SPEAKER = "speaker"
-LLM_EMOTIONS = {"joy", "sadness", "anger", "fear", "surprise", "neutral"}
-PRIMARY_EMOTION_THRESHOLD = 0.30
-EMOTION_ORDER = ("fear", "joy", "sadness", "anger", "surprise")
+from persona_pet.error_reporter import report_exception
+from persona_pet.memory import compact_text, contains_any, normalize_prosody_hint, strip_stage_directions
+from persona_pet.runtime import get_default_runtime
+from persona_pet.behavior import (
+    DIALOGUE_ROLE_LISTENER,
+    DIALOGUE_ROLE_SPEAKER,
+    EMOTION_ORDER,
+    PRIMARY_EMOTION_THRESHOLD,
+    clamp,
+    dominant_weight_emotion,
+)
+TTS_EMOTION_ALIASES = {
+    "joy": "joy",
+    "happy": "joy",
+    "fear": "fear",
+    "surprised": "surprise",
+    "suprise": "surprise",
+    "surprise": "surprise",
+    "sadness": "sadness",
+    "sad": "sadness",
+    "anger": "anger",
+    "angry": "anger",
+    "soft": "neutral",
+    "neutral": "neutral",
+}
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VOICE_OUTPUT_DIR = os.path.join(BASE_DIR, "outputs", "voice")
 _runtime_logger = None
@@ -47,17 +68,18 @@ def configure_voice_runtime(base_dir=None, voice_output_dir=None, voicevox_engin
         _runtime_logger = logger
 
 
-def clamp(value, minimum, maximum):
-    return max(minimum, min(maximum, value))
+def normalize_tts_emotion(emotion):
+    emotion = str(emotion or "neutral").strip().lower()
+    return TTS_EMOTION_ALIASES.get(emotion, "neutral")
 
 
-def dominant_weight_emotion(analysis):
-    weights = getattr(analysis, "weights", {}) or {}
-    emotion_weights = {emotion: weights.get(emotion, 0.0) for emotion in EMOTION_ORDER}
-    dominant = max(emotion_weights, key=emotion_weights.get)
-    if emotion_weights[dominant] < PRIMARY_EMOTION_THRESHOLD:
-        return "neutral"
-    return dominant
+def config_bool(config, key, default=False):
+    value = (config or {}).get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value or "").strip().lower() in ("1", "true", "yes", "y", "on")
 
 VOICEVOX_ENGINE_EXE = os.path.join(BASE_DIR, "third_party", "VOICEVOX", "engine", "windows-cpu", "run.exe")
 VOICEVOX_URL = "http://127.0.0.1:50021"
@@ -188,20 +210,6 @@ VOICEVOX_PROSODY_BY_EMOTION = {
         "pause_scale": 1.0,
         "phrase_pitch_wave": 0.0,
     },
-}
-
-PROSODY_TONE_ALIASES = {
-    "gentle": "soft",
-    "calm": "soft",
-    "comforting": "soft",
-    "happy": "bright",
-    "cheerful": "bright",
-    "cute": "bright",
-    "stern": "serious",
-    "firm": "serious",
-    "playful": "teasing",
-    "nervous": "urgent",
-    "excited": "urgent",
 }
 
 PROSODY_PHRASE_HINTS = {
@@ -342,10 +350,118 @@ class VoicevoxEvent:
     duration: float
     started_at: float
     error: str = ""
+    part_index: int = 0
+    part_count: int = 1
+    audio_chunk: object = None
+    sample_rate: int = 0
+    streaming_chunk: bool = False
+
+
+class StreamPlayer:
+    """Play streaming audio chunks through one persistent output stream."""
+
+    def __init__(self, *, channels: int = 1, dtype: str = "float32", max_queue_chunks: int = 0):
+        self.channels = channels
+        self.dtype = dtype
+        self.max_queue_chunks = max_queue_chunks
+        self._queue = queue.Queue(maxsize=max_queue_chunks)
+        self._pending = np.zeros((0, channels), dtype=np.float32)
+        self._stream = None
+        self._sample_rate = None
+        self._closed = False
+        self._drained = threading.Event()
+
+    def _load_sounddevice(self):
+        try:
+            import sounddevice as sd
+        except ImportError as exc:
+            raise ImportError(
+                "examples.audio.StreamPlayer requires the optional 'sounddevice' package. "
+                "Install it with: pip install sounddevice"
+            ) from exc
+        return sd
+
+    def _reshape_chunk(self, audio_chunk):
+        arr = np.asarray(audio_chunk, dtype=np.float32)
+        if arr.ndim == 1:
+            if self.channels != 1:
+                raise ValueError(f"Expected {self.channels} channels, got mono audio")
+            return arr.reshape(-1, 1)
+        if arr.ndim == 2:
+            if arr.shape[1] != self.channels:
+                raise ValueError(f"Expected {self.channels} channels, got {arr.shape[1]}")
+            return arr
+        raise ValueError(f"Expected 1D or 2D audio chunk, got shape {arr.shape}")
+
+    def _callback(self, outdata, frames, _time, status):
+        if self._closed:
+            outdata[:] = 0
+            sd = self._load_sounddevice()
+            raise sd.CallbackStop()
+
+        written = 0
+        while written < frames:
+            if self._pending.shape[0] == 0:
+                try:
+                    next_chunk = self._queue.get_nowait()
+                except queue.Empty:
+                    outdata[written:] = 0
+                    return
+                if next_chunk is None:
+                    outdata[written:] = 0
+                    self._drained.set()
+                    sd = self._load_sounddevice()
+                    raise sd.CallbackStop()
+                self._pending = next_chunk
+
+            take = min(frames - written, self._pending.shape[0])
+            outdata[written:written + take] = self._pending[:take]
+            self._pending = self._pending[take:]
+            written += take
+
+    def _ensure_stream(self, sample_rate: int):
+        if self._stream is not None:
+            if sample_rate != self._sample_rate:
+                raise ValueError(f"StreamPlayer sample rate changed from {self._sample_rate} to {sample_rate}")
+            return
+        sd = self._load_sounddevice()
+        self._sample_rate = sample_rate
+        self._stream = sd.OutputStream(
+            samplerate=sample_rate,
+            channels=self.channels,
+            dtype=self.dtype,
+            callback=self._callback,
+        )
+        self._stream.start()
+
+    def __call__(self, audio_chunk, sample_rate: int):
+        if self._closed:
+            raise RuntimeError("StreamPlayer is already closed")
+        self._ensure_stream(sample_rate)
+        self._queue.put(self._reshape_chunk(audio_chunk))
+
+    def close(self, *, wait: bool = True, timeout=None):
+        if self._closed:
+            return
+        self._closed = True
+        if self._stream is None:
+            return
+        self._queue.put(None)
+        if wait:
+            self._drained.wait(timeout=timeout)
+        else:
+            # Even with wait=False, give the callback a moment to see the sentinel
+            import time as _time
+            _time.sleep(0.05)
+        try:
+            self._stream.close()
+        except Exception:
+            pass
+        self._stream = None
 
 
 class VoicevoxController:
-    def __init__(self, config=None, base_dir=None, voice_output_dir=None, voicevox_engine_exe=None, logger=None):
+    def __init__(self, config=None, base_dir=None, voice_output_dir=None, voicevox_engine_exe=None, logger=None, runtime=None):
         configure_voice_runtime(
             base_dir=base_dir,
             voice_output_dir=voice_output_dir,
@@ -354,6 +470,7 @@ class VoicevoxController:
         )
         self.enabled = VOICEVOX_ENABLED
         self.lock = threading.Lock()
+        self.playback_lock = threading.Lock()
         self.events = []
         self.next_event_id = 0
         self.active_jobs = 0
@@ -361,6 +478,9 @@ class VoicevoxController:
         self.last_play_started_at = 0.0
         self.cancel_generation = 0
         self.engine_process = None
+        self.stream_player = None
+        self.stream_player_started = False
+        self.runtime = runtime or get_default_runtime()
         self.config = dict(config or {})
         self.speaker = int(self.config.get("voicevox_speaker", VOICEVOX_SPEAKER) or VOICEVOX_SPEAKER)
         self.speaker_label = str(self.config.get("voicevox_speaker_label") or VOICEVOX_SPEAKER_LABEL)
@@ -392,6 +512,41 @@ class VoicevoxController:
         self.tts_speed_ratio = float(self.config.get("volcengine_tts_speed_ratio", 1.0) or 1.0)
         self.tts_volume_ratio = float(self.config.get("volcengine_tts_volume_ratio", 1.0) or 1.0)
         self.tts_pitch_ratio = float(self.config.get("volcengine_tts_pitch_ratio", 1.0) or 1.0)
+        self.tts_provider = str(self.config.get("tts_provider") or "volcengine").strip().lower()
+        self.qwen_engine = None
+
+    def get_or_init_qwen_engine(self):
+        """Get or lazily initialize the Qwen TTS engine (non-blocking)."""
+        try:
+            from persona_pet.qwen_tts_engine import QwenTTSEngine
+        except ImportError as exc:
+            raise RuntimeError(
+                f"本地 TTS 依赖缺失: {exc}\n"
+                "请运行: pip install faster-qwen3-tts\n"
+                "PyTorch CUDA 版本请参考: https://pytorch.org/get-started/locally/"
+            ) from exc
+
+        engine = QwenTTSEngine.get_instance()
+        if engine is None:
+            model_path = str(self.config.get("qwen_tts_model_path") or "").strip()
+            ref_dir = str(self.config.get("qwen_tts_ref_dir") or "").strip()
+            ref_audio = str(self.config.get("qwen_tts_ref_audio") or "").strip()
+            ref_text = str(self.config.get("qwen_tts_ref_text") or "").strip()
+            engine = QwenTTSEngine(
+                model_path=model_path,
+                ref_dir=ref_dir,
+                ref_audio=ref_audio,
+                ref_text=ref_text,
+                xvec_only=config_bool(self.config, "qwen_tts_xvec_only", False),
+                do_sample=config_bool(self.config, "qwen_tts_do_sample", True),
+                seed=int(self.config.get("qwen_tts_seed", 24681357) or 24681357),
+                temperature=float(self.config.get("qwen_tts_temperature", 0.9) or 0.9),
+                top_p=float(self.config.get("qwen_tts_top_p", 1.0) or 1.0),
+                runtime=self.runtime,
+            )
+            engine.load_model_async()
+        self.qwen_engine = engine
+        return engine
 
     def update_config(self, config):
         with self.lock:
@@ -412,6 +567,8 @@ class VoicevoxController:
             self.tts_speed_ratio = float(self.config.get("volcengine_tts_speed_ratio", 1.0) or 1.0)
             self.tts_volume_ratio = float(self.config.get("volcengine_tts_volume_ratio", 1.0) or 1.0)
             self.tts_pitch_ratio = float(self.config.get("volcengine_tts_pitch_ratio", 1.0) or 1.0)
+            self.tts_provider = str(self.config.get("tts_provider") or "volcengine").strip().lower()
+        self.runtime.emit("tts.config_updated", {"provider": self.tts_provider, "voice_type": self.tts_voice_type})
 
     def engine_is_running(self):
         try:
@@ -455,6 +612,7 @@ class VoicevoxController:
                     process.wait(timeout=2.0)
         except Exception as exc:
             log_runtime("VOICEVOX_SHUTDOWN_ERROR", exc)
+            report_exception(self.runtime, log_runtime, "voicevox", "shutdown_engine", exc)
 
     def request_json(self, url, payload=None):
         data = None
@@ -599,7 +757,57 @@ class VoicevoxController:
         with urllib.request.urlopen(request, timeout=180) as response:
             return response.read()
 
-    def request_volcengine_tts(self, text):
+    def compute_tts_params(self, emotion="neutral", prosody=None, text=""):
+        """根据情绪和内容动态计算 TTS 参数"""
+        speed = self.tts_speed_ratio
+        volume = self.tts_volume_ratio
+        pitch = self.tts_pitch_ratio
+        # 情绪基础调整
+        emotion_boost = {
+            "joy": (1.06, 1.05, 1.04),
+            "surprise": (1.10, 1.08, 1.06),
+            "anger": (1.08, 1.10, 0.97),
+            "sadness": (0.92, 0.95, 0.97),
+            "fear": (1.04, 1.02, 1.03),
+            "neutral": (1.0, 1.0, 1.0),
+        }
+        s, v, p = emotion_boost.get(emotion, (1.0, 1.0, 1.0))
+        speed *= s
+        volume *= v
+        pitch *= p
+        # prosody hint 调整
+        if prosody:
+            pace = prosody.get("pace", "normal")
+            if pace == "fast":
+                speed *= 1.06
+            elif pace == "slow":
+                speed *= 0.93
+            tone = prosody.get("tone", "")
+            if tone == "bright":
+                pitch *= 1.03
+                volume *= 1.02
+            elif tone == "urgent":
+                speed *= 1.04
+                volume *= 1.04
+        # 亲密内容增强
+        intimate_words = ("亲", "抱", "想你", "喜欢你", "爱你", "撒娇", "嗯嗯", "啊", "呜", "唔", "哼", "嘿嘿", "嘻嘻")
+        if any(w in text for w in intimate_words):
+            speed *= 1.04
+            pitch *= 1.03
+            volume *= 1.03
+        # 拟声词增强（让语气词更有表现力）
+        exclamations = ("啊", "嗯", "唔", "呜", "哇", "诶", "嘿", "嘻", "哼", "呀")
+        exclamation_count = sum(1 for w in exclamations if w in text)
+        if exclamation_count >= 2:
+            pitch *= 1.02
+            volume *= 1.02
+        # clamp
+        speed = max(0.7, min(1.4, speed))
+        volume = max(0.7, min(1.4, volume))
+        pitch = max(0.7, min(1.4, pitch))
+        return round(speed, 3), round(volume, 3), round(pitch, 3)
+
+    def request_volcengine_tts(self, text, emotion="neutral", prosody=None):
         text = strip_stage_directions(text)
         if not text:
             raise RuntimeError("火山 TTS 文本为空。")
@@ -608,6 +816,7 @@ class VoicevoxController:
         if not self.tts_voice_type:
             raise RuntimeError("缺少火山 TTS 音色 ID。")
 
+        speed_ratio, volume_ratio, pitch_ratio = self.compute_tts_params(emotion, prosody, text)
         reqid = str(uuid.uuid4())
         app_payload = {"cluster": self.tts_cluster}
         if self.tts_appid:
@@ -619,9 +828,9 @@ class VoicevoxController:
                 "voice_type": self.tts_voice_type,
                 "encoding": self.tts_format,
                 "rate": self.tts_rate,
-                "speed_ratio": self.tts_speed_ratio,
-                "volume_ratio": self.tts_volume_ratio,
-                "pitch_ratio": self.tts_pitch_ratio,
+                "speed_ratio": speed_ratio,
+                "volume_ratio": volume_ratio,
+                "pitch_ratio": pitch_ratio,
             },
             "request": {
                 "reqid": reqid,
@@ -942,35 +1151,99 @@ class VoicevoxController:
         return query
 
     def play_wav_async(self, path, on_start=None):
+        if on_start:
+            try:
+                on_start()
+            except Exception as exc:
+                print(f"VOICEVOX_ON_START_ERROR = {exc}")
+
         def worker():
             try:
                 import winsound
 
-                with self.lock:
-                    self.last_play_started_at = time.monotonic()
-                if on_start:
-                    on_start()
-                winsound.PlaySound(path, winsound.SND_FILENAME)
+                with self.playback_lock:
+                    self.runtime.emit("tts.playback_start", {"path": path})
+                    with self.lock:
+                        self.last_play_started_at = time.monotonic()
+                    winsound.PlaySound(path, winsound.SND_FILENAME)
+                    self.runtime.emit("tts.playback_done", {"path": path})
             except Exception as exc:
                 print(f"VOICEVOX_PLAYBACK_ERROR = {exc}")
+                self.runtime.emit("tts.playback_error", {"path": path, "error": str(exc)}, level="error")
 
-        threading.Thread(target=worker, daemon=True).start()
+        self.runtime.run_background(
+            "tts_playback",
+            worker,
+            kind="audio",
+            payload={"path": path},
+            resources=("tts_playback",),
+            timeout=180,
+        )
 
     def stop_playback(self):
+        player = self.stream_player
+        self.stream_player = None
+        self.stream_player_started = False
+        if player is not None:
+            try:
+                player.close(wait=False)
+            except Exception as exc:
+                report_exception(self.runtime, log_runtime, "voicevox", "stream_player_close", exc)
         try:
             import winsound
 
             winsound.PlaySound(None, winsound.SND_PURGE)
-        except Exception:
-            pass
+        except Exception as exc:
+            report_exception(self.runtime, log_runtime, "voicevox", "winsound_purge", exc)
         with self.lock:
             self.cancel_generation += 1
             self.last_play_until = 0.0
             self.last_play_started_at = 0.0
+            self.events.clear()
+
+    def append_voice_event(
+        self,
+        event_id,
+        text,
+        emotion,
+        speaker,
+        output_path,
+        duration,
+        started_at=None,
+        error="",
+        part_index=0,
+        part_count=1,
+        audio_chunk=None,
+        sample_rate=0,
+        streaming_chunk=False,
+    ):
+        with self.lock:
+            self.events.append(
+                VoicevoxEvent(
+                    event_id,
+                    text,
+                    emotion,
+                    speaker,
+                    output_path,
+                    duration,
+                    time.monotonic() if started_at is None else started_at,
+                    error,
+                    part_index,
+                    part_count,
+                    audio_chunk,
+                    sample_rate,
+                    streaming_chunk,
+                )
+            )
 
     def synthesize_to_path(self, text, output_path, emotion, source_text="", prosody_hint=None):
         text = strip_stage_directions(text)
-        wav = self.request_volcengine_tts(text)
+        if self.tts_provider == "local":
+            engine = self.get_or_init_qwen_engine()
+            emotion = normalize_tts_emotion(emotion)
+            _path, duration = engine.synthesize(text, emotion, output_path, prosody_hint=prosody_hint)
+            return output_path, duration, "qwen_local"
+        wav = self.request_volcengine_tts(text, emotion=emotion, prosody=prosody_hint)
         with open(output_path, "wb") as file:
             file.write(wav)
         if self.tts_format == "wav":
@@ -982,7 +1255,8 @@ class VoicevoxController:
 
     def synthesize(self, text, event_id, emotion, source_text="", prosody_hint=None):
         os.makedirs(VOICE_OUTPUT_DIR, exist_ok=True)
-        output_path = os.path.join(VOICE_OUTPUT_DIR, f"persona_volcengine_{event_id:04d}.{self.tts_format}")
+        prefix = "persona_local" if self.tts_provider == "local" else "persona_volcengine"
+        output_path = os.path.join(VOICE_OUTPUT_DIR, f"{prefix}_{event_id:04d}.wav")
         return self.synthesize_to_path(
             text,
             output_path,
@@ -991,16 +1265,61 @@ class VoicevoxController:
             prosody_hint=prosody_hint,
         )
 
+    def synthesize_local_streaming_events(self, text, event_id, emotion, prosody_hint=None):
+        engine = self.get_or_init_qwen_engine()
+        emotion = normalize_tts_emotion(emotion)
+        text = strip_stage_directions(text)
+        if not text:
+            return False
+
+        chunk_size = int(self.config.get("qwen_tts_stream_chunk_size", 8) or 8)
+        chunk_count = 0
+        for index, (audio_chunk, sr, _timing) in enumerate(
+            engine.stream_synthesize_chunks(
+                text,
+                emotion=emotion,
+                prosody_hint=prosody_hint,
+                chunk_size=chunk_size,
+            )
+        ):
+            duration = len(audio_chunk) / max(sr, 1)
+            self.append_voice_event(
+                event_id,
+                text,
+                emotion,
+                "qwen_local",
+                "",
+                duration,
+                part_index=index,
+                part_count=0,
+                audio_chunk=audio_chunk,
+                sample_rate=sr,
+                streaming_chunk=True,
+            )
+            chunk_count += 1
+        return chunk_count > 0
+
+    def play_stream_chunk(self, audio_chunk, sample_rate, on_start=None):
+        if self.stream_player is None:
+            self.stream_player = StreamPlayer()
+            self.stream_player_started = False
+        if not self.stream_player_started:
+            with self.lock:
+                self.last_play_started_at = time.monotonic()
+            if on_start:
+                on_start()
+            self.stream_player_started = True
+        self.stream_player(audio_chunk, sample_rate)
+
     def synthesize_segments(self, segments, event_id, fallback_text="", fallback_emotion="neutral", prosody_hint=None):
         os.makedirs(VOICE_OUTPUT_DIR, exist_ok=True)
+        fallback_emotion = normalize_tts_emotion(fallback_emotion)
         cleaned_segments = []
         for segment in segments or []:
             if not isinstance(segment, dict):
                 continue
             zh = strip_stage_directions(segment.get("zh") or segment.get("voice_text") or "")
-            emotion = str(segment.get("emotion") or fallback_emotion or "neutral").strip().lower()
-            if emotion not in LLM_EMOTIONS:
-                emotion = fallback_emotion if fallback_emotion in LLM_EMOTIONS else "neutral"
+            emotion = normalize_tts_emotion(segment.get("emotion") or fallback_emotion or "neutral")
             if zh:
                 cleaned_segments.append({"zh": zh, "emotion": emotion})
         if not cleaned_segments:
@@ -1011,12 +1330,22 @@ class VoicevoxController:
                 source_text=fallback_text,
                 prosody_hint=prosody_hint,
             )
+        if self.tts_provider == "local":
+            merged_text = fallback_text or "".join(segment["zh"] for segment in cleaned_segments)
+            return self.synthesize(
+                merged_text,
+                event_id,
+                fallback_emotion,
+                source_text=merged_text,
+                prosody_hint=prosody_hint,
+            )
 
         segment_paths = []
         speakers = []
+        prefix = "persona_local" if self.tts_provider == "local" else "persona_volcengine"
         try:
             for index, segment in enumerate(cleaned_segments):
-                segment_path = os.path.join(VOICE_OUTPUT_DIR, f"persona_volcengine_{event_id:04d}_seg{index + 1}.{self.tts_format}")
+                segment_path = os.path.join(VOICE_OUTPUT_DIR, f"{prefix}_{event_id:04d}_seg{index + 1}.wav")
                 _path, _duration, speaker = self.synthesize_to_path(
                     segment["zh"],
                     segment_path,
@@ -1027,7 +1356,7 @@ class VoicevoxController:
                 segment_paths.append(segment_path)
                 speakers.append(speaker)
 
-            output_path = os.path.join(VOICE_OUTPUT_DIR, f"persona_volcengine_{event_id:04d}.{self.tts_format}")
+            output_path = os.path.join(VOICE_OUTPUT_DIR, f"{prefix}_{event_id:04d}.wav")
             self.concatenate_wavs(segment_paths, output_path)
             self.normalize_wav_peak(output_path)
             return output_path, self.wav_duration(output_path), speakers[0] if speakers else self.tts_voice_type
@@ -1035,8 +1364,8 @@ class VoicevoxController:
             for path in segment_paths:
                 try:
                     os.remove(path)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    report_exception(self.runtime, log_runtime, "voicevox", "cleanup_segment_wav", exc, path=path)
 
     def apply_song_melody(self, query, emotion):
         phrases = query.get("accent_phrases") or []
@@ -1120,8 +1449,17 @@ class VoicevoxController:
             duration = 0.0
             started_at = time.monotonic()
             speaker = self.tts_voice_type
+            streamed = False
             try:
-                if singing:
+                self.runtime.emit(
+                    "tts.synthesis_start",
+                    {"event_id": event_id, "emotion": emotion, "chars": len(text or ""), "provider": self.tts_provider},
+                )
+                if self.tts_provider == "local" and not singing and not segments:
+                    streamed = self.synthesize_local_streaming_events(text, event_id, emotion, prosody_hint=prosody_hint)
+                if streamed:
+                    pass
+                elif singing:
                     output_path, duration, speaker = self.synthesize_song(text, event_id, emotion)
                 elif segments:
                     output_path, duration, speaker = self.synthesize_segments(
@@ -1140,16 +1478,33 @@ class VoicevoxController:
                         prosody_hint=prosody_hint,
                     )
                 started_at = time.monotonic()
+                self.runtime.emit(
+                    "tts.synthesis_done",
+                    {"event_id": event_id, "duration": round(float(duration or 0.0), 3), "streamed": streamed},
+                )
             except Exception as exc:
                 error = str(exc)
+                self.runtime.emit("tts.synthesis_error", {"event_id": event_id, "error": error}, level="error")
             with self.lock:
                 self.active_jobs = max(0, self.active_jobs - 1)
                 if cancel_generation != self.cancel_generation:
                     return
+                if streamed and error:
+                    self.events.append(VoicevoxEvent(event_id, text, emotion, speaker, output_path, duration, started_at, error))
+                    return
+                if streamed:
+                    return
                 self.last_play_until = max(self.last_play_until, started_at + duration)
                 self.events.append(VoicevoxEvent(event_id, text, emotion, speaker, output_path, duration, started_at, error))
 
-        threading.Thread(target=worker, daemon=True).start()
+        self.runtime.run_background(
+            "tts_synthesis",
+            worker,
+            kind="audio",
+            payload={"event_id": event_id, "emotion": emotion, "chars": len(text or "")},
+            resources=("tts_synthesis",),
+            timeout=300,
+        )
         return event_id
 
     def consume_events(self):
@@ -1173,5 +1528,67 @@ class VoicevoxController:
             self.last_play_started_at = now
             self.last_play_until = max(self.last_play_until, now + max(0.0, duration) + max(0.0, guard_seconds))
 
+    def extend_playing(self, duration):
+        duration = max(0.0, float(duration or 0.0))
+        if duration <= 0.0:
+            return
+        now = time.monotonic()
+        with self.lock:
+            if self.last_play_started_at <= 0.0 or now >= self.last_play_until:
+                self.last_play_started_at = now
+                self.last_play_until = now + duration
+            else:
+                self.last_play_until = max(self.last_play_until, now) + duration
+
+    def play_nonverbal(self, reaction="shy", zone=""):
+        """Play a short synthesized non-verbal sound (gasp/moan/coy hum).
+        Uses sine-wave shaping for a natural feel, no external files needed."""
+        import math
+        sr = 24000
+        # Duration and frequency vary by reaction
+        presets = {
+            "shy":    {"dur": 0.30, "f0": 280, "f1": 320, "breathy": 0.35},
+            "happy":  {"dur": 0.35, "f0": 340, "f1": 400, "breathy": 0.25},
+            "clingy": {"dur": 0.50, "f0": 260, "f1": 300, "breathy": 0.45},
+            "nervous": {"dur": 0.25, "f0": 300, "f1": 280, "breathy": 0.50},
+        }
+        p = presets.get(reaction, presets["shy"])
+        dur = p["dur"]
+        n = int(sr * dur)
+        t = np.linspace(0, dur, n, dtype=np.float32)
+        # Frequency sweep (slight rise or fall)
+        freq = p["f0"] + (p["f1"] - p["f0"]) * (t / dur)
+        phase = 2.0 * np.pi * np.cumsum(freq) / sr
+        # Base tone with soft harmonics
+        tone = (np.sin(phase) * 0.6
+                + np.sin(phase * 2.0) * 0.2
+                + np.sin(phase * 3.0) * 0.08)
+        # Breathiness: filtered noise mixed in
+        noise = np.random.randn(n).astype(np.float32) * p["breathy"]
+        # Simple one-pole lowpass on noise
+        alpha = 0.08
+        for i in range(1, n):
+            noise[i] = noise[i] * alpha + noise[i - 1] * (1.0 - alpha)
+        signal = tone + noise * 0.3
+        # Envelope: quick attack, smooth decay
+        attack = np.minimum(t / 0.04, 1.0)
+        decay = np.exp(-t * 4.0) * 0.6 + np.exp(-t * 1.5) * 0.4
+        envelope = attack * decay
+        signal *= envelope
+        # Normalize
+        peak = float(np.max(np.abs(signal))) or 1.0
+        signal = signal / peak * 0.7
+        # Play via stream player (non-blocking)
+        try:
+            if self.stream_player is not None and not self.stream_player._closed:
+                chunk = signal.reshape(-1, 1).astype(np.float32)
+                self.stream_player(chunk, sr)
+            else:
+                player = StreamPlayer()
+                chunk = signal.reshape(-1, 1).astype(np.float32)
+                player(chunk, sr)
+                player.close()
+        except Exception:
+            pass
 
 

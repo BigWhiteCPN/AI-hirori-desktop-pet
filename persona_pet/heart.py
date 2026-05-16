@@ -67,6 +67,7 @@ class PersonaHeart:
         meta_key=HEART_STATE_META_KEY,
         reflection_interval_seconds=(55.0, 120.0),
         min_reflection_memory_seconds=180.0,
+        consolidation_interval_seconds=(300.0, 600.0),
         logger=None,
     ):
         self.memory_store = memory_store
@@ -76,13 +77,17 @@ class PersonaHeart:
         self.meta_key = meta_key
         self.reflection_interval_seconds = tuple(reflection_interval_seconds)
         self.min_reflection_memory_seconds = float(min_reflection_memory_seconds)
+        self.consolidation_interval_seconds = tuple(consolidation_interval_seconds)
         self.log_runtime = logger or (lambda *parts: None)
         self.last_status_update_at = 0.0
         self.last_save_at = 0.0
         self.last_reflection_memory_at = 0.0
+        self._dirty = False
+        self.last_consolidate_at = 0.0
         self.state = self._load_state()
         now = time.monotonic()
         self.next_reflection_at = now + random.uniform(8.0, 22.0)
+        self.next_consolidate_at = now + random.uniform(60.0, 120.0)
         self.reflect(now=now, reason="boot", force=True)
 
     def _default_state(self):
@@ -116,20 +121,38 @@ class PersonaHeart:
     def save(self, force=False):
         now = time.monotonic()
         if not force and now - self.last_save_at < 10.0:
+            self._dirty = True
             return
         self.last_save_at = now
+        self._dirty = False
         self.memory_store.save_meta_json(self.meta_key, self.state)
+
+    def flush_if_dirty(self):
+        if self._dirty:
+            self.save(force=True)
 
     def tick(self, now=None, busy=False, current_emotion="neutral"):
         now = time.monotonic() if now is None else float(now)
         if now - self.last_status_update_at >= 1.0:
             self.last_status_update_at = now
             self.update_mood(current_emotion=current_emotion)
-        if not busy and now >= self.next_reflection_at:
-            self.reflect(now=now, reason="idle_memory")
-            low, high = self.reflection_interval_seconds
-            self.next_reflection_at = now + random.uniform(float(low), float(high))
-        self.save()
+
+    def maybe_consolidate(self, now=None):
+        now = time.monotonic() if now is None else float(now)
+        if now - self.last_consolidate_at < 120.0:
+            return
+        if not hasattr(self.memory_store, "consolidate_graph"):
+            return
+        try:
+            edges_added = self.memory_store.consolidate_graph()
+            self.last_consolidate_at = now
+            low, high = self.consolidation_interval_seconds
+            self.next_consolidate_at = now + random.uniform(float(low), float(high))
+            if edges_added > 0:
+                self.log_runtime("HEART_CONSOLIDATE", {"edges_added": edges_added})
+        except Exception as exc:
+            self.log_runtime("HEART_CONSOLIDATE_ERROR", exc)
+            self.next_consolidate_at = now + 120.0
 
     def update_mood(self, current_emotion="neutral"):
         drive_mood = "quiet"
@@ -171,7 +194,7 @@ class PersonaHeart:
         elif emotion == "joy":
             thought = f"这句话让气氛轻了一点。我想记住他开心时提到的：{compact}"
         elif emotion == "anger":
-            thought = f"我感觉到一点锋利的情绪，先不要急着反驳：{compact}"
+            thought = f"我感觉到一点锋利的情绪，先把它放进心里看清楚：{compact}"
         elif "?" in text or "？" in text:
             thought = f"他在问我问题。我想认真想清楚，再给出不生硬的回答：{compact}"
         else:
@@ -304,11 +327,14 @@ class PersonaHeart:
         thought = self.state.get("thought") or ""
         mood = self.state.get("mood") or "安静观察"
         focus = self.state.get("focus_memory_text") or ""
-        association = {}
-        try:
-            association = self.memory_store.load_meta_json("last_association", {})
-        except Exception:
-            association = {}
+        now = time.monotonic()
+        if now - getattr(self, '_last_association_load_at', 0.0) > 5.0:
+            try:
+                self._cached_association = self.memory_store.load_meta_json("last_association", {})
+            except Exception:
+                self._cached_association = {}
+            self._last_association_load_at = now
+        association = getattr(self, '_cached_association', {})
         return {
             "personality": copy.deepcopy(INFP_PERSONALITY),
             "mood": mood,
@@ -336,18 +362,22 @@ class HeartStatusBar(QLabel):
         self.setWordWrap(False)
         self.setStyleSheet(
             "QLabel#heartStatusBar {"
-            "background: rgba(255, 248, 253, 218);"
-            "border: 1px solid rgba(222, 112, 168, 185);"
-            "border-radius: 10px;"
-            "padding: 2px 9px;"
+            "background: rgba(255, 248, 253, 235);"
+            "border: 1px solid rgba(222, 112, 168, 205);"
+            "border-radius: 12px;"
+            "padding: 4px 11px;"
             "color: #684158;"
-            "font: 8pt 'Microsoft YaHei UI';"
+            "font: 9pt 'Microsoft YaHei UI';"
             "}"
         )
         self.refresh()
         self.show()
 
     def refresh(self):
+        now = time.monotonic()
+        if now - getattr(self, '_last_refresh_at', 0.0) < 1.0:
+            return
+        self._last_refresh_at = now
         snapshot = self.heart.snapshot()
         available = max(40, self.width() - 22)
         parent = self.parent()
@@ -399,10 +429,10 @@ class HeartMixin:
     def layout_heart_status_bar(self):
         if not hasattr(self, "heart_status_bar"):
             return
-        margin = 22
-        top = 0
+        margin = 18
+        top = 8
         width = max(180, self.width() - margin * 2)
-        self.heart_status_bar.setGeometry(margin, top, width, 24)
+        self.heart_status_bar.setGeometry(margin, top, width, 30)
         self.heart_status_bar.raise_()
 
     def tick_heart_module(self, now=None, busy=False):

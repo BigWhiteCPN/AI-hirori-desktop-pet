@@ -10,6 +10,9 @@ import time
 import wave
 from dataclasses import dataclass, field
 
+from persona_pet.error_reporter import report_exception
+from persona_pet.runtime import get_default_runtime
+
 @dataclass
 class SpeechInputEvent:
     text: str = ""
@@ -36,6 +39,7 @@ class SpeechInputController:
         sample_rate=16000,
         helper_timeout_seconds=0.0,
         logger=None,
+        runtime=None,
     ):
         self.enabled = bool(enabled)
         self.voice_output_dir = voice_output_dir
@@ -53,11 +57,14 @@ class SpeechInputController:
         self.sample_rate = int(sample_rate)
         self.helper_timeout_seconds = float(helper_timeout_seconds)
         self.logger = logger or (lambda *parts: None)
+        self.runtime = runtime or get_default_runtime()
         self.lock = threading.Lock()
         self.events = []
         self.busy = False
         self.model = None
         self.current_process = None
+        self._persistent_proc = None
+        self._persistent_lock = threading.Lock()
 
     def is_busy(self):
         with self.lock:
@@ -66,24 +73,108 @@ class SpeechInputController:
     def load_model(self):
         if self.model is not None:
             return self.model
-        os.makedirs(self.model_dir, exist_ok=True)
-        from faster_whisper import WhisperModel
+        with self.lock:
+            if self.model is not None:
+                return self.model
+            os.makedirs(self.model_dir, exist_ok=True)
+            from faster_whisper import WhisperModel
 
-        try:
-            self.model = WhisperModel(
-                self.model_size,
-                device="cuda",
-                compute_type="int8_float16",
-                download_root=self.model_dir,
-            )
-        except Exception:
-            self.model = WhisperModel(
-                self.model_size,
-                device="cpu",
-                compute_type="int8",
-                download_root=self.model_dir,
-            )
+            try:
+                self.model = WhisperModel(
+                    self.model_size,
+                    device="cuda",
+                    compute_type="int8_float16",
+                    download_root=self.model_dir,
+                )
+            except Exception as exc:
+                report_exception(self.runtime, self.logger, "speech", "load_cuda_model", exc, model_size=self.model_size)
+                self.model = WhisperModel(
+                    self.model_size,
+                    device="cpu",
+                    compute_type="int8",
+                    download_root=self.model_dir,
+                )
         return self.model
+
+    def _ensure_persistent(self):
+        """Start the persistent SenseVoice subprocess if not running."""
+        with self._persistent_lock:
+            if self._persistent_proc is not None and self._persistent_proc.poll() is None:
+                return True
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--speech-helper", "--persistent"]
+            else:
+                cmd = [sys.executable, "-B", self.helper_path, "--persistent"]
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            try:
+                self._persistent_proc = subprocess.Popen(
+                    cmd,
+                    cwd=self.base_dir,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=creationflags,
+                )
+                # Skip non-JSON lines (warnings, progress bars) until ready signal
+                for _ in range(50):
+                    ready_line = self._persistent_proc.stdout.readline()
+                    if not ready_line:
+                        break
+                    ready_line = ready_line.strip()
+                    if ready_line.startswith("{"):
+                        try:
+                            ready = json.loads(ready_line)
+                            break
+                        except json.JSONDecodeError:
+                            continue
+                else:
+                    ready = {}
+                if ready.get("ready"):
+                    self.logger("SPEECH_PERSISTENT_READY", {})
+                    return True
+                else:
+                    self.logger("SPEECH_PERSISTENT_NOT_READY", ready)
+                    return False
+            except Exception as exc:
+                self.logger("SPEECH_PERSISTENT_START_ERROR", str(exc)[:200])
+                self._persistent_proc = None
+                return False
+
+    def _transcribe_persistent(self, wav_path):
+        """Send WAV path to persistent process and get transcription."""
+        proc = self._persistent_proc
+        if proc is None or proc.poll() is not None:
+            raise RuntimeError("persistent process not running")
+        req = json.dumps({"wav_path": wav_path}) + "\n"
+        proc.stdin.write(req)
+        proc.stdin.flush()
+        # Skip non-JSON lines (progress bars, warnings)
+        for _ in range(100):
+            line = proc.stdout.readline()
+            if not line:
+                raise RuntimeError("persistent process died")
+            line = line.strip()
+            if line.startswith("{"):
+                return json.loads(line)
+        raise RuntimeError("no JSON response from persistent process")
+
+    def stop_persistent(self):
+        """Stop the persistent subprocess."""
+        with self._persistent_lock:
+            if self._persistent_proc is not None:
+                try:
+                    self._persistent_proc.stdin.write("quit\n")
+                    self._persistent_proc.stdin.flush()
+                    self._persistent_proc.wait(timeout=3.0)
+                except Exception:
+                    try:
+                        self._persistent_proc.kill()
+                    except Exception:
+                        pass
+                self._persistent_proc = None
 
     def write_wav(self, path, samples):
         import numpy as np
@@ -103,6 +194,8 @@ class SpeechInputController:
     def record_and_transcribe(self):
         os.makedirs(self.voice_output_dir, exist_ok=True)
         wav_path = os.path.join(self.voice_output_dir, "speech_input_last.wav")
+
+        # Step 1: Record audio in subprocess
         if getattr(sys, "frozen", False):
             cmd = [sys.executable, "--speech-helper"]
         else:
@@ -132,6 +225,7 @@ class SpeechInputController:
                 wav_path,
                 "--config",
                 self.llm_config_path,
+                "--record-only",
             ]
         )
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -168,11 +262,37 @@ class SpeechInputController:
         if process.returncode != 0 or not payload.get("ok"):
             error = payload.get("error") or stderr or stdout or f"speech helper exited {process.returncode}"
             raise RuntimeError(error)
-        return (
-            str(payload.get("text", "")).strip(),
-            str(payload.get("wav_path") or wav_path),
-            payload.get("audio_stats") or {},
-        )
+
+        recorded_wav = str(payload.get("wav_path") or wav_path)
+        stats = payload.get("audio_stats") or {}
+
+        # Step 2: Transcribe via persistent SenseVoice process
+        try:
+            if not self._ensure_persistent():
+                raise RuntimeError("failed to start persistent process")
+            result = self._transcribe_persistent(recorded_wav)
+            text = str(result.get("text", "")).strip()
+            stats.update(result.get("audio_stats") or {})
+        except Exception as exc:
+            self.logger("SPEECH_PERSISTENT_ERROR", str(exc)[:200])
+            # Fallback: run full helper (includes transcription)
+            cmd = [c for c in cmd if c != "--record-only"]
+            process2 = subprocess.Popen(
+                cmd,
+                cwd=self.base_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creationflags,
+            )
+            stdout2, _ = process2.communicate(timeout=helper_timeout)
+            payload2 = self.parse_helper_payload((stdout2 or "").strip())
+            text = str(payload2.get("text", "")).strip()
+            stats = payload2.get("audio_stats") or stats
+
+        return (text, recorded_wav, stats)
 
     def parse_helper_payload(self, stdout):
         cleaned = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", stdout or "").strip()
@@ -193,17 +313,18 @@ class SpeechInputController:
             process = self.current_process
             self.current_process = None
             self.busy = False
-        if process is None:
-            return
-        try:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=1.5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-        except Exception as exc:
-            self.logger("SPEECH_HELPER_STOP_ERROR", exc)
+        if process is not None:
+            try:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=1.5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+            except Exception as exc:
+                self.logger("SPEECH_HELPER_STOP_ERROR", exc)
+                report_exception(self.runtime, self.logger, "speech", "stop_helper", exc)
+        self.stop_persistent()
 
     def listen_async(self):
         if not self.enabled:
@@ -218,14 +339,21 @@ class SpeechInputController:
             error = ""
             wav_path = ""
             try:
-                text, wav_path, stats = self.record_and_transcribe()
+                with self.runtime.span("speech.listen", kind="audio", payload={"model_size": self.model_size}):
+                    text, wav_path, stats = self.record_and_transcribe()
             except Exception as exc:
                 error = str(exc)
+                self.runtime.emit("speech.error", {"error": error}, level="error")
             with self.lock:
                 self.busy = False
+                self.runtime.emit(
+                    "speech.result",
+                    {"has_text": bool(text), "error": bool(error), "wav_path": wav_path},
+                    level="error" if error else "info",
+                )
                 self.events.append(SpeechInputEvent(text=text, error=error, wav_path=wav_path, audio_stats=stats if "stats" in locals() else {}))
 
-        threading.Thread(target=worker, daemon=True).start()
+        self.runtime.run_background("speech_input", worker, kind="thread")
         return True
 
     def consume_events(self):
@@ -243,6 +371,7 @@ class BargeInController:
         min_voiced_seconds=0.32,
         rms=0.14,
         noise_multiplier=7.5,
+        runtime=None,
     ):
         self.enabled = bool(enabled)
         self.sample_rate = int(sample_rate)
@@ -250,6 +379,7 @@ class BargeInController:
         self.min_voiced_seconds = float(min_voiced_seconds)
         self.rms = float(rms)
         self.noise_multiplier = float(noise_multiplier)
+        self.runtime = runtime or get_default_runtime()
         self.lock = threading.Lock()
         self.running = False
         self.active = False
@@ -267,15 +397,24 @@ class BargeInController:
 
         def worker():
             try:
+                self.runtime.emit("barge_in.monitor_start", {})
                 self.monitor_loop()
             except Exception as exc:
                 with self.lock:
                     self.running = False
                     self.active = False
                     self.events.append({"error": str(exc)})
+                self.runtime.emit("barge_in.error", {"error": str(exc)}, level="error")
+            finally:
+                self.runtime.emit("barge_in.monitor_stop", {})
 
-        self.thread = threading.Thread(target=worker, daemon=True)
-        self.thread.start()
+        task = self.runtime.run_background(
+            "barge_in_monitor",
+            worker,
+            kind="audio",
+            resources=("audio_input",),
+        )
+        self.thread = task.thread
         return True
 
     def stop(self):
@@ -353,6 +492,71 @@ def normalize_speech_piece(text):
     return re.sub(r"[\s,，。！？!?；;、~～…\.]+", "", text or "")
 
 def clean_speech_input_text(text):
+    original = re.sub(r"\s+", "", text or "").strip()
+    if not original:
+        return ""
+
+    def key_of(value):
+        return re.sub(r"[\s,，。！？!?；;、~～….\-]+", "", value or "")
+
+    def repeat_key(value):
+        return re.sub(r"[\s,，。！？?！、~～….\-]+", "", value or "")
+
+    for end in range(len(original) - 1, 1, -1):
+        prefix = original[:end].strip()
+        suffix = original[end:].strip()
+        prefix_key = repeat_key(prefix)
+        suffix_key = repeat_key(suffix)
+        if len(prefix_key) < 3 or not suffix_key:
+            continue
+        if len(suffix_key) % len(prefix_key) == 0 and suffix_key == prefix_key * (len(suffix_key) // len(prefix_key)):
+            return prefix
+
+    raw_parts = []
+    current = ""
+    for char in original:
+        current += char
+        if char in "。！？!?；;，,":
+            raw_parts.append(current)
+            current = ""
+    if current:
+        raw_parts.append(current)
+
+    parts = []
+    keys = []
+    for part in raw_parts:
+        part = part.strip()
+        key = key_of(part)
+        if key:
+            parts.append(part)
+            keys.append(key)
+
+    if parts:
+        deduped = []
+        deduped_keys = []
+        index = 0
+        while index < len(parts):
+            matched = False
+            for group_size in range(min(4, (len(parts) - index) // 2), 0, -1):
+                group = keys[index : index + group_size]
+                if group == keys[index + group_size : index + group_size * 2]:
+                    deduped.extend(parts[index : index + group_size])
+                    deduped_keys.extend(group)
+                    index += group_size
+                    while keys[index : index + group_size] == group:
+                        index += group_size
+                    matched = True
+                    break
+            if matched:
+                continue
+            if keys[index] not in deduped_keys[-3:]:
+                deduped.append(parts[index])
+                deduped_keys.append(keys[index])
+            index += 1
+        result = "".join(deduped).strip()
+        if result:
+            return result
+
     text = re.sub(r"\s+", "", text or "").strip()
     if not text:
         return ""

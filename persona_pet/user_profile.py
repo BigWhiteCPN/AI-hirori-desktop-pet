@@ -7,7 +7,7 @@ import copy
 import re
 import time
 
-from persona_pet.memory import compact_text, memory_now_label
+from persona_pet.memory import compact_text, contains_any, memory_now_label
 
 
 USER_PROFILE_META_KEY = "user_profile"
@@ -18,10 +18,6 @@ MBTI_AXES = ("EI", "SN", "TF", "JP")
 
 def clamp(value, low=-100.0, high=100.0):
     return max(low, min(high, float(value)))
-
-
-def contains_any(text, words):
-    return any(word in text for word in words)
 
 
 class PersonaUserProfile:
@@ -173,7 +169,7 @@ class PersonaUserProfile:
         else:
             rules.append("先说明原因和取舍，再补一点情绪照顾")
         if mbti[3] == "P":
-            rules.append("减少固定模板，语气自然灵活")
+            rules.append("语气更自然灵活")
         else:
             rules.append("回应可以更有结构和计划感")
 
@@ -210,7 +206,7 @@ class PersonaUserProfile:
     def build_prompt_context(self):
         snap = self.snapshot()
         return (
-            "用户心理侧写（启发式估计，不要直接对用户宣布，除非用户询问）：\n"
+            "用户心理侧写（启发式估计，像观察和理解一样使用）：\n"
             f"- 估计 MBTI：{snap['mbti']}，置信度 {snap['confidence']:.1f}%，样本 {snap['message_count']} 条。\n"
             f"- 沟通偏好：细节={snap['style']['detail']}，情绪={snap['style']['emotion']}，玩笑={snap['style']['playfulness']}，主动={snap['style']['proactive']}。\n"
             "- 行为调整：" + "；".join(snap["adaptation_rules"])

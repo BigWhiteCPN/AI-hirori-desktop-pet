@@ -1,7 +1,25 @@
 """Prompt contracts shared by LLM calls."""
 
+SPOKEN_DIALOGUE_CONTRACT = (
+    "\n[口语输出契约]\n"
+    "只输出 JSON，不要输出 Markdown、解释、旁白或代码块。\n"
+    "新的标准字段是 spoken_text：它是唯一会被界面显示和 TTS 朗读的内容。\n"
+    "JSON 格式：{"
+    "\"spoken_text\":\"苏念亲口说出的第一人称口语\","
+    "\"emotion\":\"joy/sadness/anger/fear/surprise/neutral\","
+    "\"segments\":[{\"spoken_text\":\"只写亲口说出的话\",\"emotion\":\"joy/sadness/anger/fear/surprise/neutral\"}],"
+    "\"prosody\":{\"pace\":\"slow/normal/fast\",\"tone\":\"soft/bright/serious/teasing/urgent\",\"emphasis\":[],\"pause_after\":[]}"
+    "}。\n"
+    "spoken_text 和 segments[].spoken_text 只能写苏念此刻对用户亲口说的话。\n"
+    "严禁把旁白、动作描写、心理描写、镜头描写、第三人称叙述、舞台提示、括号动作写进 spoken_text。\n"
+    "不要写“她说/苏念说/她轻轻笑了笑/声音软下来/低下头/靠近你”这类小说句子。\n"
+    "如果想表达动作或亲近，只能改成自然第一人称口语，例如：“我想牵一下你的手。”\n"
+    "不要输出 inner_state、action、narration、aside 等非口语字段；即使输出，程序也会忽略。\n"
+    "兼容旧字段时可以同时给 zh 和 voice_text，但它们必须与 spoken_text 表达同一段亲口台词。\n"
+)
+
 PROSODY_PROMPT_CONTRACT = (
-    "必须只输出 JSON，不要输出 Markdown。JSON 格式为："
+    "为了让桌宠能读取情绪和配音信息，请输出一个 JSON 对象，格式为："
     "{\"zh\":\"中文回复\","
     "\"emotion\":\"joy/sadness/anger/fear/surprise/neutral\","
     "\"segments\":[{\"zh\":\"分句中文\","
@@ -10,11 +28,9 @@ PROSODY_PROMPT_CONTRACT = (
     "\"tone\":\"soft/bright/serious/teasing/urgent\","
     "\"emphasis\":[\"需要重读的短词\"],"
     "\"pause_after\":[\"需要稍微停顿的短词\"]}}。"
-    "zh 要简短自然，通常一到三句话，直接作为中文配音台词。"
-    "segments 按语义和情绪拆成一到四段，每段要短，不要为了拆分而拆分。"
-    "emotion 必须从 joy、sadness、anger、fear、surprise、neutral 中选择一个。"
-    "prosody 用来描述说话节奏和重音。"
-    "严禁在 zh 或 segments 中写括号动作、舞台说明、表情说明、心理描写。"
-    "不要输出类似（挥手）、（笑）、（名残惜しそうに）的内容。"
+    "zh 是她此刻真正想说的话；emotion 和 prosody 只是把她自然说话时的情绪、节奏记录下来。"
+    "segments 可以按语义和情绪自然拆分，也可以留空。"
+    "说话要有真人聊天的感觉：亲密时语气更柔软、更有起伏，可以用语气词（嗯、啊、唔、哼、嘿嘿）让表达更生动；"
+    "开心时语速可以快一点、音调高一点；害羞或撒娇时可以断断续续、拖长音；"
+    "不要太平淡，要有情绪的高潮和低谷。"
 )
-

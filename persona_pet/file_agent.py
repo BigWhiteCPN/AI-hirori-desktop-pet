@@ -6,6 +6,8 @@ import zipfile
 from dataclasses import dataclass
 from xml.sax.saxutils import escape
 
+from persona_pet.tool_permissions import audit_tool_event, assess_tool_action
+
 DEFAULT_AGENT_FILE_NAME_MAX_CHARS = 48
 
 @dataclass
@@ -256,7 +258,12 @@ def write_pptx_file(path, title, content):
             pptx.writestr(f"ppt/slides/slide{index}.xml", pptx_slide_xml(title if index == 1 else f"{title} {index}", slide))
             pptx.writestr(f"ppt/slides/_rels/slide{index}.xml.rels", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>')
 
-def execute_file_agent_action(action, base_dir, logger=None, max_chars=DEFAULT_AGENT_FILE_NAME_MAX_CHARS):
+def execute_file_agent_action(action, base_dir, logger=None, max_chars=DEFAULT_AGENT_FILE_NAME_MAX_CHARS, runtime=None):
+    decision = assess_tool_action("file_agent", action.kind, text=f"{action.name}\n{action.content}", runtime=runtime)
+    if not decision.allowed:
+        audit_tool_event(runtime, "reject", "file_agent", {"action": action.kind, "reason": decision.reason, "risk": decision.risk}, level="warning")
+        raise RuntimeError(f"File agent action rejected: {decision.reason}")
+    audit_tool_event(runtime, "start", "file_agent", {"action": action.kind, "name": action.name, "risk": decision.risk, "preview": decision.preview})
     if action.kind == "folder":
         path = file_agent_safe_path(action.name, base_dir=base_dir, max_chars=max_chars)
         os.makedirs(path, exist_ok=False)
@@ -270,4 +277,5 @@ def execute_file_agent_action(action, base_dir, logger=None, max_chars=DEFAULT_A
         raise RuntimeError("未知文件操作。")
     if logger:
         logger("FILE_AGENT_EXECUTE", {"kind": action.kind, "path": path})
+    audit_tool_event(runtime, "done", "file_agent", {"action": action.kind, "path": path})
     return path

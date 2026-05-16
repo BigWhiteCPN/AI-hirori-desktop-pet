@@ -10,6 +10,7 @@ from persona_pet.file_agent import (
     file_agent_is_confirm,
     parse_file_agent_action,
 )
+from persona_pet.tool_permissions import build_tool_dry_run
 
 
 class AgentCommandMixin:
@@ -34,6 +35,7 @@ class AgentCommandMixin:
                         self.agent_files_dir,
                         logger=self.runtime_logger,
                         max_chars=self.agent_file_name_max_chars,
+                        runtime=getattr(self, "runtime", None),
                     )
                     message = f"已创建：{os.path.basename(path)}\n位置：{os.path.dirname(path)}"
                     if hasattr(self, "memory_associate_output"):
@@ -54,6 +56,21 @@ class AgentCommandMixin:
         if not action:
             return False
 
+        preview = build_tool_dry_run(
+            "file_agent",
+            action.kind,
+            text=f"{action.name}\n{action.content}",
+            runtime=getattr(self, "runtime", None),
+        )
+        if not preview.get("allowed"):
+            message = f"File agent rejected: {preview.get('reason')}"
+            if hasattr(self, "memory_associate_output"):
+                self.memory_associate_output(message, source="file_agent_reject")
+            self.chat_input.clear()
+            self.show_subtitle(message, voice_text="", duration=4.0)
+            self.show_chat_status("文件动作被拒绝", seconds=3.0)
+            return True
+
         self.pending_file_action = action
         message = (
             f"准备{describe_file_agent_action(action)}\n"
@@ -69,10 +86,31 @@ class AgentCommandMixin:
         return True
 
     def confirm_browser_agent_action(self, action):
+        preview = build_tool_dry_run(
+            "browser_agent",
+            action.kind,
+            text=action.text or action.target,
+            runtime=getattr(self, "runtime", None),
+        )
+        if not preview.get("allowed"):
+            message = f"Browser agent rejected: {preview.get('reason')}"
+            QMessageBox.warning(self, "Browser agent rejected", message)
+            if hasattr(self, "memory_associate_output"):
+                self.memory_associate_output(message, source="browser_agent_reject")
+            return False
         message = (
             f"{describe_browser_agent_action(action)}\n\n"
             "安全限制：独立浏览器 profile；不登录、不支付、不删除、不发消息、不运行命令、不读取本地文件。\n"
             "本次确认只允许执行这一个动作，执行后授权立刻失效。"
+        )
+        details = preview.get("preview") or {}
+        message += (
+            f"\n\nRisk: {preview.get('risk')}"
+            f"\nPermission: {preview.get('permission')}"
+            f"\nDomain policy: {details.get('domain_policy', '')}"
+            f"\nDomain: {details.get('domain', '')}"
+            f"\nURL: {details.get('url', action.target)}"
+            f"\nNeeds confirmation: {preview.get('requires_confirmation')}"
         )
         result = QMessageBox.question(
             self,

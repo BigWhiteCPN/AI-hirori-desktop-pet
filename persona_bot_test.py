@@ -1,8 +1,12 @@
-﻿import math
+import faulthandler
+import math
 import os
 import random
+import shutil
 import sys
 import time
+
+faulthandler.enable()
 
 os.environ["QT_OPENGL"] = "desktop"
 os.environ["QT_GL_MODULE"] = "desktop"
@@ -23,6 +27,19 @@ from PyQt5.QtWidgets import (
 import live2d.v3 as live2d
 
 from persona_pet.agent_commands import AgentCommandMixin
+from persona_pet.economy import EconomyMixin
+from persona_pet.items import BackpackMixin
+from persona_pet.todo import TodoMixin
+from persona_pet.city_mode import CityModeMixin, CITY_WINDOW_WIDTH, CITY_WINDOW_HEIGHT
+from persona_pet.body_cycle import BodyCycleSystem
+from persona_pet.emotion_engine import EmotionEngine
+from persona_pet.episodic_memory import EpisodicMemoryStore
+from persona_pet.idle_scheduler import IdleBehavior, IdleScheduler
+from persona_pet.metacognition import MetacognitionEngine
+from persona_pet.pattern_detector import PatternDetector
+from persona_pet.personality_growth import PersonalityGrowth
+from persona_pet.subtext_analyzer import analyze_subtext
+from persona_pet.time_awareness import TimeAwareness
 from persona_pet.behavior import (
     BehaviorController,
     EmotionAnalysis,
@@ -42,18 +59,42 @@ from persona_pet.llm_config import build_default_llm_config, load_llm_config_fil
 from persona_pet.llm_client import LLMChatController
 from persona_pet.life_system import PersonaDriveSystem, PersonaLifeSystem
 from persona_pet.life_writing import LifeWritingController
+from persona_pet.reading import ReadingController
 from persona_pet.memory import PersonaMemoryStore
+from persona_pet.godot_bridge import GodotBridgeMixin
 from persona_pet.room_mode import RoomModeMixin
+from persona_pet.runtime import AgentRuntime
 from persona_pet.pet_dialogue import PetDialogueMixin
 from persona_pet.pet_interactions import PetInteractionMixin
 from persona_pet.pet_render import PetRenderMixin
+from persona_pet.mouse_tracker import MouseTracker
 from persona_pet.pet_workflow import PetWorkflowMixin
 from persona_pet.physiology import PhysiologyMixin
+from persona_pet.error_reporter import report_exception
+from persona_pet.profile_runtime import (
+    apply_runtime_profile,
+    profile_config_path as build_profile_config_path,
+    profile_output_dir as build_profile_output_dir,
+)
+from persona_pet.stimulus import Stimulus
+from persona_pet.stimulus_dispatcher import StimulusDispatcher
 from persona_pet.speech import BargeInController, SpeechInputController
-from persona_pet.status_dialogs import DriveStatusDialog, MemoryGraphDialog
-from persona_pet.ui_dialogs import ApiSettingsDialog, MiniGameDialog
+from persona_pet.status_dialogs import DriveStatusDialog, MemoryGraphDialog, RelationshipDialog
+from persona_pet.touch_visual import TouchVisual
+from persona_pet.touch_zone_config import (
+    AUTO_TOUCH_ZONE_TEMPLATE_VERSION,
+    TOUCH_ZONE_ORDER,
+    build_auto_touch_zone_config,
+    has_touch_zone_rects,
+    load_touch_zone_config,
+    save_touch_zone_config,
+    touch_zone_label,
+)
+from persona_pet.ui_dialogs import ApiSettingsDialog, FirstRunDialog, MiniGameDialog
 from persona_pet.user_profile import UserProfileMixin
 from persona_pet.voicevox import VoicevoxController
+from persona_pet.voicevox import config_bool
+from persona_pet.activity_monitor import ActivityMonitor
 
 
 if getattr(sys, "frozen", False):
@@ -84,8 +125,8 @@ def setup_windowed_logging():
             sys.stdout = log_file
         if sys.stderr is None:
             sys.stderr = log_file
-    except Exception:
-        pass
+    except Exception as exc:
+        report_exception(logger=log_runtime, component="app", operation="setup_windowed_logging", exc=exc)
 
 
 setup_windowed_logging()
@@ -99,39 +140,64 @@ MODEL_JSON_PATH = os.path.join(
 WINDOW_WIDTH = 420
 WINDOW_HEIGHT = 700
 ROOM_WINDOW_WIDTH = 760
-ROOM_WINDOW_HEIGHT = 520
+ROOM_WINDOW_HEIGHT = 570
 ROOM_MODEL_SCALE = 0.72
 ROOM_ASSET_DIR = os.path.join(BASE_DIR, "assets", "room")
 ROOM_LAYOUT_PATH = os.path.join(ROOM_ASSET_DIR, "room_layout.json")
 ROOM_MODEL_Z = 50
 FRAME_INTERVAL_MS = 16
-IDLE_MOTION_INTERVAL = (3.0, 5.6)
-EMOTION_MOTION_COOLDOWN = 0.9
-PRIMARY_EMOTION_THRESHOLD = 0.30
 DIALOGUE_ROLE_LISTENER = "listener"
 DIALOGUE_ROLE_SPEAKER = "speaker"
-DIALOGUE_SENTENCE_GAP = {
-    DIALOGUE_ROLE_LISTENER: 0.75,
-    DIALOGUE_ROLE_SPEAKER: 0.45,
-}
-LLM_EMOTIONS = {"joy", "sadness", "anger", "fear", "surprise", "neutral"}
-MOUTH_ENABLE_FOR_SPEAKER = True
-MOUTH_OPEN_SCALE = 0.92
-MOUTH_FORM_SCALE = 0.14
-VOICE_OUTPUT_DIR = os.path.join(BASE_DIR, "outputs", "voice")
-MEMORY_DIR = os.path.join(BASE_DIR, "outputs", "memory")
+
+# Runtime profile controls.
+# Default remains "test" to preserve the existing IDE behavior.
+# Use --profile main, --profile test, or PERSONA_RUN_PROFILE=main/test to choose explicitly.
+# Use --reset-profile once to wipe a non-main profile at startup.
+PROFILE_SELECTION = apply_runtime_profile(default_profile="test", default_reset=False, argv=sys.argv)
+RUN_PROFILE = PROFILE_SELECTION["profile"]
+RESET_PROFILE_ON_START = PROFILE_SELECTION["reset"]
+
+
+def profile_output_dir(*parts):
+    return build_profile_output_dir(BASE_DIR, RUN_PROFILE, *parts)
+
+
+def profile_config_path():
+    return build_profile_config_path(BASE_DIR, RUN_PROFILE)
+
+
+def maybe_reset_profile_on_start():
+    profile = str(RUN_PROFILE or "main").strip() or "main"
+    if not RESET_PROFILE_ON_START or profile == "main":
+        return
+    target = os.path.abspath(os.path.join(BASE_DIR, "outputs", "profiles", profile))
+    allowed_root = os.path.abspath(os.path.join(BASE_DIR, "outputs", "profiles"))
+    if os.path.isdir(target) and os.path.commonpath([allowed_root, target]) == allowed_root:
+        shutil.rmtree(target)
+    config_path = os.path.abspath(profile_config_path())
+    expected_config = os.path.abspath(os.path.join(BASE_DIR, f"persona_llm_config.{profile}.json"))
+    if config_path == expected_config and os.path.exists(config_path):
+        os.remove(config_path)
+
+
+maybe_reset_profile_on_start()
+
+VOICE_OUTPUT_DIR = profile_output_dir("voice")
+MEMORY_DIR = profile_output_dir("memory")
 MEMORY_PATH = os.path.join(MEMORY_DIR, "persona_memory.json")
 MEMORY_DB_PATH = os.path.join(MEMORY_DIR, "persona_memory.db")
 MEMORY_SHORT_TERM_LIMIT = 300
-AGENT_FILES_DIR = os.path.join(BASE_DIR, "outputs", "agent_files")
+AGENT_FILES_DIR = profile_output_dir("agent_files")
 AGENT_FILE_NAME_MAX_CHARS = 48
-BROWSER_AGENT_DIR = os.path.join(BASE_DIR, "outputs", "browser_agent")
+BROWSER_AGENT_DIR = profile_output_dir("browser_agent")
 BROWSER_AGENT_PROFILE_DIR = os.path.join(BROWSER_AGENT_DIR, "profile")
 BROWSER_AGENT_SCREENSHOT_DIR = os.path.join(BROWSER_AGENT_DIR, "screenshots")
 BROWSER_AGENT_LOG_PATH = os.path.join(BROWSER_AGENT_DIR, "browser_agent.log")
-CHAT_ADVICE_DIR = os.path.join(BASE_DIR, "outputs", "chat_advice")
+CHAT_ADVICE_DIR = profile_output_dir("chat_advice")
 CHAT_ADVICE_SCREENSHOT_DIR = os.path.join(CHAT_ADVICE_DIR, "screenshots")
-LIFE_DIR = os.path.join(BASE_DIR, "outputs", "life")
+INTERACTION_DIR = profile_output_dir("interaction")
+TOUCH_ZONE_CONFIG_PATH = os.path.join(INTERACTION_DIR, "touch_zones.json")
+LIFE_DIR = profile_output_dir("life")
 LIFE_DIARY_DIR = os.path.join(LIFE_DIR, "diary")
 LIFE_NOVEL_DIR = os.path.join(LIFE_DIR, "novel")
 VOICEVOX_ENGINE_EXE = os.path.join(BASE_DIR, "third_party", "VOICEVOX", "engine", "windows-cpu", "run.exe")
@@ -146,17 +212,17 @@ VOLCENGINE_TTS_FORMAT = "wav"
 VOLCENGINE_TTS_RATE = 24000
 SUBTITLES_ENABLED = False
 SUBTITLE_SECONDS_PAD = 0.9
-LLM_CONFIG_PATH = os.path.join(BASE_DIR, "persona_llm_config.json")
+LLM_CONFIG_PATH = profile_config_path()
 SPEECH_INPUT_ENABLED = True
 SPEECH_RECORD_SECONDS = 0.0
-SPEECH_MIN_RECORD_SECONDS = 0.75
-SPEECH_SILENCE_SECONDS = 1.05
+SPEECH_MIN_RECORD_SECONDS = 0.50
+SPEECH_SILENCE_SECONDS = 0.65
 SPEECH_SILENCE_RMS = 0.008
 SPEECH_START_TIMEOUT = 8.0
 SPEECH_HELPER_TIMEOUT_SECONDS = 0.0
 SPEECH_CHUNK_MS = 40
 SPEECH_SAMPLE_RATE = 16000
-SPEECH_MODEL_SIZE = os.environ.get("PERSONA_SPEECH_MODEL", "base")
+SPEECH_MODEL_SIZE = os.environ.get("PERSONA_SPEECH_MODEL", "small")
 SPEECH_MODEL_DIR = os.path.join(BASE_DIR, "third_party", "faster_whisper")
 SPEECH_HELPER_PATH = os.path.join(BASE_DIR, "persona_speech_input_once.py")
 VOICE_PLAYBACK_GUARD_SECONDS = 0.25
@@ -168,8 +234,8 @@ BARGE_IN_RMS = 0.14
 BARGE_IN_NOISE_MULTIPLIER = 7.5
 BARGE_IN_AFTER_PLAYBACK_SECONDS = 0.9
 PROACTIVE_ENABLED = True
-PROACTIVE_IDLE_SECONDS = 60.0
-PROACTIVE_INTERVAL_SECONDS = (90.0, 180.0)
+PROACTIVE_IDLE_SECONDS = 240.0
+PROACTIVE_INTERVAL_SECONDS = (300.0, 480.0)
 DRIVE_STATE_META_KEY = "drive_state"
 LIFE_STATE_META_KEY = "life_state"
 SELF_NOTE_META_KEY = "self_notes"
@@ -237,7 +303,12 @@ class Live2DDesktopPet(
     PetDialogueMixin,
     PetInteractionMixin,
     ChatAdviceCaptureMixin,
+    GodotBridgeMixin,
     RoomModeMixin,
+    CityModeMixin,
+    EconomyMixin,
+    BackpackMixin,
+    TodoMixin,
     PhysiologyMixin,
     UserProfileMixin,
     HeartMixin,
@@ -253,6 +324,16 @@ class Live2DDesktopPet(
         self.current_analysis = EmotionAnalysis.neutral()
         self.current_test_key = Qt.Key_1
         self.test_text = TEST_TEXTS[Qt.Key_1]
+        self.runtime = AgentRuntime(log_dir=LOG_DIR, logger=log_runtime)
+        self.runtime.emit(
+            "app.boot",
+            {
+                "profile": str(RUN_PROFILE or "main"),
+                "profile_source": PROFILE_SELECTION.get("source", "default"),
+                "memory_db": MEMORY_DB_PATH,
+                "config": LLM_CONFIG_PATH,
+            },
+        )
         self.memory = PersonaMemoryStore(
             MEMORY_PATH,
             MEMORY_DB_PATH,
@@ -276,6 +357,7 @@ class Live2DDesktopPet(
             diary_dir=LIFE_DIARY_DIR,
             novel_dir=LIFE_NOVEL_DIR,
         )
+        self.life.user_gender = self.llm_config.get("user_gender", "")
         self.setup_user_profile_module()
         self.voice = VoicevoxController(
             config=self.llm_config,
@@ -283,13 +365,15 @@ class Live2DDesktopPet(
             voice_output_dir=VOICE_OUTPUT_DIR,
             voicevox_engine_exe=VOICEVOX_ENGINE_EXE,
             logger=log_runtime,
+            runtime=self.runtime,
         )
-        self.chat = LLMChatController(config=self.llm_config, memory_store=self.memory, life_system=self.life, **llm_chat_controller_kwargs())
+        self.chat = LLMChatController(config=self.llm_config, memory_store=self.memory, life_system=self.life, runtime=self.runtime, **llm_chat_controller_kwargs())
         self.chat_advice = ChatAdviceController(
             config=self.llm_config,
             memory_store=self.memory,
             client_kwargs=llm_client_kwargs(),
             default_config=DEFAULT_LLM_CONFIG,
+            runtime=self.runtime,
         )
         self.life_writer = LifeWritingController(
             config=self.llm_config,
@@ -298,6 +382,15 @@ class Live2DDesktopPet(
             client_kwargs=llm_client_kwargs(),
             default_config=DEFAULT_LLM_CONFIG,
             diary_daily_word_limit=LIFE_DIARY_DAILY_WORD_LIMIT,
+            runtime=self.runtime,
+        )
+        self.reader = ReadingController(
+            config=self.llm_config,
+            memory_store=self.memory,
+            life_system=self.life,
+            client_kwargs=llm_client_kwargs(),
+            default_config=DEFAULT_LLM_CONFIG,
+            runtime=self.runtime,
         )
         self.singing_enabled = bool(self.llm_config.get("singing_enabled", SINGING_ENABLED))
         self.speech_input = SpeechInputController(
@@ -317,6 +410,7 @@ class Live2DDesktopPet(
             sample_rate=SPEECH_SAMPLE_RATE,
             helper_timeout_seconds=SPEECH_HELPER_TIMEOUT_SECONDS,
             logger=log_runtime,
+            runtime=self.runtime,
         )
         self.barge_in = BargeInController(
             enabled=BARGE_IN_ENABLED,
@@ -325,9 +419,11 @@ class Live2DDesktopPet(
             min_voiced_seconds=BARGE_IN_MIN_VOICED_SECONDS,
             rms=BARGE_IN_RMS,
             noise_multiplier=BARGE_IN_NOISE_MULTIPLIER,
+            runtime=self.runtime,
         )
         self.memory_dialog = None
         self.drive_dialog = None
+        self.relationship_dialog = None
         self.library_dialog = None
         self.mini_game_dialog = None
         self.chat_advice_dialog = None
@@ -343,9 +439,34 @@ class Live2DDesktopPet(
         self.chat_status_until = 0.0
         self.free_talk_enabled = False
         self.free_talk_next_at = 0.0
-        self.last_user_interaction_at = time.monotonic()
+        self.app_started_at = time.monotonic()
+        self.last_user_interaction_at = self.app_started_at
+        self.last_assistant_activity_at = self.app_started_at
         self.next_proactive_at = self.last_user_interaction_at + random.uniform(*PROACTIVE_INTERVAL_SECONDS)
         self.drag_offset = None
+        self._drag_threshold_px = 8.0
+        self._drag_started_at = 0.0
+        self._drag_moved = False
+        self._left_press_pos = None
+        self._left_press_global = None
+        self._left_press_started_at = 0.0
+        self._touch_history = []
+        self._last_touch_at = 0.0
+        self.touch_zone_config_path = TOUCH_ZONE_CONFIG_PATH
+        self.touch_zone_config = load_touch_zone_config(self.touch_zone_config_path)
+        if (
+            not has_touch_zone_rects(self.touch_zone_config)
+            or (
+                bool(self.touch_zone_config.get("auto_generated", False))
+                and int(self.touch_zone_config.get("template_version", 0) or 0) < AUTO_TOUCH_ZONE_TEMPLATE_VERSION
+            )
+        ):
+            self.touch_zone_config = build_auto_touch_zone_config()
+        self.touch_zone_editor_enabled = False
+        self.touch_zone_editor_zone_index = 0
+        self.touch_zone_editor_selected_key = TOUCH_ZONE_ORDER[0][0]
+        self.touch_zone_editor_drag_start = None
+        self.touch_zone_editor_drag_current = None
         self.dialogue_active = False
         self.dialogue_role = DIALOGUE_ROLE_LISTENER
         self.dialogue_sentences = []
@@ -366,8 +487,35 @@ class Live2DDesktopPet(
             BROWSER_AGENT_SCREENSHOT_DIR,
             log_path=BROWSER_AGENT_LOG_PATH,
             logger=log_runtime,
+            runtime=self.runtime,
         )
+        self.stimulus_dispatcher = StimulusDispatcher(self, logger=log_runtime)
+        self.mouse_tracker = MouseTracker(
+            gaze_radius_px=float(self.llm_config.get("interaction_gaze_radius_px", 500) or 500),
+            stare_threshold_sec=float(self.llm_config.get("interaction_stare_threshold_sec", 3.0) or 3.0),
+        )
+        self._touch_visual = TouchVisual()
+        self.activity_monitor = None
         self.self_notes = self.load_self_notes()
+        self.emotion_engine = EmotionEngine()
+        self.episodic_memory = EpisodicMemoryStore(self.memory, logger=log_runtime)
+        self.time_awareness = TimeAwareness(self.memory, logger=log_runtime)
+        self.pattern_detector = PatternDetector(self.memory, self.life, logger=log_runtime)
+        self.personality_growth = PersonalityGrowth(self.memory, logger=log_runtime)
+        self.metacognition = MetacognitionEngine(self.memory, logger=log_runtime)
+        self.body_cycle = BodyCycleSystem(self.memory, logger=log_runtime)
+        self.chat.client._time_awareness = self.time_awareness
+        self.chat.client._subtext_analyzer = lambda text: analyze_subtext(
+            text,
+            recent_history=self.memory.data.get("short_terms", [])[-5:],
+            relationship_score=self.life.relationship_score,
+        )
+        self.chat.client._pattern_detector = self.pattern_detector
+        self.chat.client._personality_growth = self.personality_growth
+        self.chat.client._metacognition = self.metacognition
+        self.chat.client._episodic_memory = self.episodic_memory
+        self.chat.client._emotion_engine = self.emotion_engine
+        self.chat.client._body_cycle = self.body_cycle
         self.room_window_width = ROOM_WINDOW_WIDTH
         self.room_window_height = ROOM_WINDOW_HEIGHT
         self.default_window_width = WINDOW_WIDTH
@@ -385,6 +533,21 @@ class Live2DDesktopPet(
         self.room_last_motion_at = 0.0
         self.room_pixmaps = {}
         self.room_layout = self.load_room_layout()
+        self.godot_bridge_dir = profile_output_dir("godot_bridge")
+        self.setup_godot_bridge()
+
+        self.city_mode = False
+        self.city_window_width = CITY_WINDOW_WIDTH
+        self.city_window_height = CITY_WINDOW_HEIGHT
+        self.load_city_layout()
+
+        self.setup_economy_module()
+        self.setup_backpack_module()
+        self.chat.client._economy = self.economy
+        self.chat.client._backpack = self.backpack
+        self.setup_todo_module()
+
+        self.idle_scheduler = self._build_idle_scheduler()
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -397,14 +560,19 @@ class Live2DDesktopPet(
         self.chat_input.setPlaceholderText("按 V 语音输入；也可以输入文字后回车发送")
         self.chat_input.setStyleSheet(
             "QLineEdit {"
-            "background: rgba(255, 248, 253, 230);"
-            "border: 1px solid rgba(255, 150, 205, 210);"
-            "border-radius: 14px;"
-            "padding: 8px 12px;"
+            "background: rgba(255, 248, 253, 238);"
+            "border: 1px solid rgba(222, 112, 168, 205);"
+            "border-radius: 12px;"
+            "padding: 7px 12px;"
             "color: #563248;"
             "font: 10pt 'Microsoft YaHei UI';"
             "}"
+            "QLineEdit:focus {"
+            "background: rgba(255, 255, 255, 245);"
+            "border-color: rgba(197, 74, 130, 230);"
+            "}"
         )
+        self.chat_input.textEdited.connect(lambda _text: self.mark_user_active("typing"))
         self.chat_input.returnPressed.connect(self.submit_chat_input)
 
         self.help_button = QToolButton(self)
@@ -415,8 +583,8 @@ class Live2DDesktopPet(
         self.help_button.setStyleSheet(
             "QToolButton {"
             "background: rgba(255, 248, 253, 238);"
-            "border: 1px solid rgba(255, 150, 205, 210);"
-            "border-radius: 14px;"
+            "border: 1px solid rgba(222, 112, 168, 205);"
+            "border-radius: 12px;"
             "color: #8f2d5a;"
             "font: 12pt 'Microsoft YaHei UI';"
             "font-weight: 700;"
@@ -436,8 +604,8 @@ class Live2DDesktopPet(
         self.close_button.setStyleSheet(
             "QToolButton {"
             "background: rgba(255, 248, 253, 238);"
-            "border: 1px solid rgba(255, 120, 170, 220);"
-            "border-radius: 14px;"
+            "border: 1px solid rgba(222, 112, 168, 205);"
+            "border-radius: 12px;"
             "color: #8f2d5a;"
             "font: 14pt 'Microsoft YaHei UI';"
             "padding-bottom: 2px;"
@@ -452,12 +620,534 @@ class Live2DDesktopPet(
         )
         self.close_button.clicked.connect(self.close)
         self.setup_physiology_module()
+        self.chat.client._physiology = self.physiology
         self.setup_heart_module()
         self.layout_chat_input()
+        self._setup_interaction_activity_monitor()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update)
         self.timer.start(FRAME_INTERVAL_MS)
+        if bool(self.llm_config.get("onboarding_first_greeting_pending")):
+            QTimer.singleShot(1800, self.play_first_contact_greeting)
+
+    def _setup_interaction_activity_monitor(self):
+        if not config_bool(self.llm_config, "interaction_activity_monitor_enabled", False):
+            return
+        poll_seconds = float(self.llm_config.get("interaction_activity_poll_seconds", 10.0) or 10.0)
+        self.activity_monitor = ActivityMonitor(poll_interval=poll_seconds, logger=log_runtime)
+        self.activity_monitor.start(self._on_activity_monitor_event)
+
+    def _on_activity_monitor_event(self, raw):
+        raw = dict(raw or {})
+        event_type = str(raw.get("type") or "").strip().lower()
+        if not event_type:
+            return
+        emotion_map = {
+            "env_change": "neutral",
+            "work_overtime": "fear",
+            "late_night": "fear",
+        }
+        meta = {}
+        for key, value in raw.items():
+            if key == "app_name" and not config_bool(self.llm_config, "interaction_activity_store_app_name", False):
+                continue
+            meta[key] = value
+        stimulus = Stimulus(
+            type=event_type,
+            intensity=0.3 if event_type == "env_change" else 0.5,
+            emotion_hint=emotion_map.get(event_type, "neutral"),
+            source="activity",
+            meta=meta,
+            memory_worthy=event_type in {"work_overtime", "late_night"},
+            should_talk=event_type in {"work_overtime", "late_night"},
+            cooldown_key=event_type,
+        )
+        self.stimulus_dispatcher.submit_from_thread(stimulus)
+
+    def _build_idle_scheduler(self):
+        scheduler = IdleScheduler(logger=log_runtime, dispatcher=lambda fn: QTimer.singleShot(0, fn), runtime=getattr(self, "runtime", None))
+
+        scheduler.register(IdleBehavior(
+            name="self_note",
+            base_priority=85,
+            cooldown=60.0,
+            min_idle=PROACTIVE_IDLE_SECONDS,
+            energy_floor=24.0,
+            ready_fn=lambda: self._scheduler_self_note_ready(),
+            execute_fn=lambda: self._scheduler_self_note(),
+            resources=("idle_behavior", "memory_write", "profile_write"),
+        ))
+
+        scheduler.register(IdleBehavior(
+            name="life_writing",
+            base_priority=70,
+            cooldown=300.0,
+            min_idle=75.0,
+            energy_floor=35.0,
+            ready_fn=lambda: self._scheduler_life_writing_ready(),
+            execute_fn=lambda: self._scheduler_life_writing(),
+            randomize_cooldown=True,
+            cooldown_range=(240.0, 420.0),
+            resources=("idle_behavior", "llm", "file_write", "life_state", "memory_write"),
+        ))
+        # Guaranteed daily writing: no idle/energy requirement, fires late at night
+        scheduler.register(IdleBehavior(
+            name="guaranteed_writing",
+            base_priority=95,
+            cooldown=600.0,
+            min_idle=0.0,
+            energy_floor=0.0,
+            ready_fn=lambda: self._scheduler_guaranteed_writing_ready(),
+            execute_fn=lambda: self._scheduler_life_writing(),
+            resources=("idle_behavior", "llm", "file_write", "life_state", "memory_write"),
+        ))
+
+        # Daily reading: character reads something and reflects
+        scheduler.register(IdleBehavior(
+            name="daily_reading",
+            base_priority=65,
+            cooldown=600.0,
+            min_idle=60.0,
+            energy_floor=20.0,
+            ready_fn=lambda: self._scheduler_daily_reading_ready(),
+            execute_fn=lambda: self._scheduler_daily_reading(),
+            randomize_cooldown=True,
+            cooldown_range=(480.0, 900.0),
+            resources=("idle_behavior", "llm", "memory_write", "life_state"),
+        ))
+        # Guaranteed reading: fires late at night if not done today
+        scheduler.register(IdleBehavior(
+            name="guaranteed_reading",
+            base_priority=94,
+            cooldown=600.0,
+            min_idle=0.0,
+            energy_floor=0.0,
+            ready_fn=lambda: self._scheduler_guaranteed_reading_ready(),
+            execute_fn=lambda: self._scheduler_daily_reading(),
+            resources=("idle_behavior", "llm", "memory_write", "life_state"),
+        ))
+
+        scheduler.register(IdleBehavior(
+            name="proactive_chat",
+            base_priority=60,
+            cooldown=180.0,
+            min_idle=120.0,
+            energy_floor=0.0,
+            ready_fn=lambda: self._scheduler_proactive_ready(),
+            execute_fn=lambda: self._scheduler_proactive_chat(),
+            randomize_cooldown=True,
+            cooldown_range=(180.0, 300.0),
+            boost_per_second=0.025,
+            resources=("idle_behavior", "llm", "memory_write", "profile_write"),
+        ))
+
+        scheduler.register(IdleBehavior(
+            name="idle_mood_note",
+            base_priority=40,
+            cooldown=600.0,
+            min_idle=480.0,
+            energy_floor=0.0,
+            ready_fn=lambda: self._scheduler_mood_note_ready(),
+            execute_fn=lambda: self._scheduler_mood_note(),
+            resources=("idle_behavior", "life_state"),
+        ))
+
+        scheduler.register(IdleBehavior(
+            name="consolidate",
+            base_priority=25,
+            cooldown=300.0,
+            min_idle=0.0,
+            energy_floor=0.0,
+            ready_fn=lambda: hasattr(self.memory, 'consolidate_graph'),
+            execute_fn=lambda: self._scheduler_consolidate(),
+            randomize_cooldown=True,
+            cooldown_range=(300.0, 600.0),
+            resources=("idle_behavior", "memory_write"),
+        ))
+
+        scheduler.register(IdleBehavior(
+            name="reflection",
+            base_priority=20,
+            cooldown=55.0,
+            min_idle=0.0,
+            energy_floor=0.0,
+            ready_fn=lambda: hasattr(self, 'heart'),
+            execute_fn=lambda: self._scheduler_reflect(),
+            randomize_cooldown=True,
+            cooldown_range=(55.0, 120.0),
+            boost_per_second=0.015,
+            resources=("idle_behavior", "life_state"),
+        ))
+
+        scheduler.register(IdleBehavior(
+            name="silent_motion",
+            base_priority=10,
+            cooldown=90.0,
+            min_idle=60.0,
+            energy_floor=0.0,
+            ready_fn=lambda: self.model is not None,
+            execute_fn=lambda: self._scheduler_silent_motion(),
+            randomize_cooldown=True,
+            cooldown_range=(90.0, 180.0),
+            resources=("idle_behavior", "motion"),
+        ))
+
+        scheduler.register(IdleBehavior(
+            name="episodic_memory",
+            base_priority=30,
+            cooldown=120.0,
+            min_idle=0.0,
+            energy_floor=0.0,
+            ready_fn=lambda: hasattr(self, 'episodic_memory'),
+            execute_fn=lambda: self._scheduler_episodic_memory(),
+            resources=("idle_behavior", "memory_write"),
+        ))
+
+        scheduler.register(IdleBehavior(
+            name="metacognition",
+            base_priority=15,
+            cooldown=600.0,
+            min_idle=0.0,
+            energy_floor=0.0,
+            ready_fn=lambda: hasattr(self, 'metacognition'),
+            execute_fn=lambda: self.metacognition.reflect_on_recent(),
+            resources=("idle_behavior", "memory_write"),
+        ))
+
+        scheduler.register(IdleBehavior(
+            name="pattern_check",
+            base_priority=35,
+            cooldown=300.0,
+            min_idle=300.0,
+            energy_floor=0.0,
+            ready_fn=lambda: hasattr(self, 'pattern_detector'),
+            execute_fn=lambda: self._scheduler_pattern_check(),
+            resources=("idle_behavior", "profile_write"),
+        ))
+
+        scheduler.register(IdleBehavior(
+            name="memory_decay",
+            base_priority=22,
+            cooldown=600.0,
+            min_idle=60.0,
+            energy_floor=0.0,
+            ready_fn=lambda: hasattr(self, 'memory'),
+            execute_fn=lambda: self.memory.decay_memories(),
+            resources=("idle_behavior", "memory_write"),
+        ))
+
+        scheduler.register(IdleBehavior(
+            name="flush_dirty",
+            base_priority=5,
+            cooldown=30.0,
+            min_idle=0.0,
+            energy_floor=0.0,
+            ready_fn=lambda: True,
+            execute_fn=lambda: self._flush_dirty_modules(),
+            resources=("idle_behavior", "profile_write", "life_state"),
+        ))
+
+        return scheduler
+
+    def _scheduler_self_note_ready(self):
+        if not self.self_notes:
+            return False
+        now = time.monotonic()
+        quiet_since = max(self.last_user_interaction_at, getattr(self, "last_assistant_activity_at", 0.0))
+        if (now - quiet_since) < PROACTIVE_IDLE_SECONDS:
+            return False
+        if (now - getattr(self, "app_started_at", now)) < PROACTIVE_IDLE_SECONDS:
+            return False
+        return not (
+            self.chat.is_busy()
+            or self.voice.is_busy_or_playing(now)
+            or self.behavior.is_speaking(now)
+        )
+
+    def _scheduler_self_note(self):
+        if not self.self_notes:
+            return False
+        now = time.monotonic()
+        quiet_since = max(self.last_user_interaction_at, getattr(self, "last_assistant_activity_at", 0.0))
+        idle_seconds = now - quiet_since
+        if idle_seconds < PROACTIVE_IDLE_SECONDS or (now - getattr(self, "app_started_at", now)) < PROACTIVE_IDLE_SECONDS:
+            return False
+        if self.chat.is_busy() or self.voice.is_busy_or_playing(now) or self.behavior.is_speaking(now):
+            return False
+        note = sorted(self.self_notes, key=lambda item: float(item.get("priority", 1.0)), reverse=True)[0]
+        prompt = (
+            "你现在不是被动回答用户，而是想主动表达一段自己的深层感受。\n"
+            f"用户安静了约{int(idle_seconds)}秒。你的待表达念头：{note.get('text', '')}\n"
+            "把它整理成一句更细腻的第一人称关系感受、反思总结或温柔但有棱角的观点。"
+            "让表达像她自己突然想通或想靠近时说出来的话，长短、语气、是否提问都跟随当下心情。"
+        )
+        if hasattr(self.memory, "associative_trace"):
+            self.memory.associative_trace(prompt, source="self_note", role="output_plan")
+        self.show_chat_status("她正在整理一段想主动说的深层感受。", seconds=2.2)
+        if not self.chat.ask_async(prompt, initiated_by="proactive", memory_user_text="桌宠主动行动：self_expression"):
+            return False
+        self.self_notes.remove(note)
+        self.save_self_notes()
+        self.drive.record_intent("self_expression", "主动表达深层感受或关系反思", score=note.get("priority"))
+        self.drive.last_action_type = "self_expression"
+        self.drive.save()
+        print("PROACTIVE_SELF_NOTE =", {"kind": note.get("kind"), "text": note.get("text")})
+        return True
+
+    def _scheduler_life_writing_ready(self):
+        now = time.monotonic()
+        if self.free_talk_enabled and (now - self.last_user_interaction_at) < 300.0 and not self.life.is_user_away(now):
+            return False
+        if time.monotonic() < self.drive.proactive_backoff_until:
+            return False
+        if self.life.needs_diary():
+            return True
+        return self.life.should_write_novel()
+
+    def _scheduler_guaranteed_writing_ready(self):
+        """Force writing if daily writing was missed or it is late in the day."""
+        import datetime
+        now = time.monotonic()
+        if now - getattr(self, "app_started_at", now) < 120.0:
+            return False
+        if self.life.needs_diary() and getattr(self.life, "missed_diary_days", lambda: 0)() >= 1:
+            return True
+        if self.life.should_write_novel() and now - getattr(self, "app_started_at", now) >= 240.0:
+            return True
+        hour = datetime.datetime.now().hour
+        # After 22:00, force diary if not written; after 23:00 force novel too
+        if self.life.needs_diary() and hour >= 22:
+            return True
+        if self.life.should_write_novel() and hour >= 23:
+            return True
+        return False
+
+    def _scheduler_daily_reading_ready(self):
+        return self.life.needs_reading()
+
+    def _scheduler_guaranteed_reading_ready(self):
+        import datetime
+        hour = datetime.datetime.now().hour
+        return self.life.needs_reading() and hour >= 21
+
+    def _scheduler_daily_reading(self):
+        if self.reader.read_async():
+            self.show_chat_status("苏念在看书...", seconds=12.0)
+            print("READING_START")
+            return True
+        return False
+
+    def _scheduler_life_writing(self):
+        now = time.monotonic()
+        if self.free_talk_enabled:
+            self.free_talk_enabled = False
+            self.free_talk_next_at = 0.0
+            self.barge_in.stop()
+            self.show_chat_status("她先去写点东西。", seconds=3.0)
+        kind = "diary" if self.life.needs_diary() else "novel"
+        if kind == "novel" and not self.life.should_write_novel():
+            return False
+
+        def _after_writing():
+            if kind == "diary" and self.life.should_write_novel():
+                print("LIFE_WRITING_CHAIN_NOVEL_AFTER_DIARY")
+                self.life_writer.write_async("novel")
+
+        if self.life_writer.write_async(kind, after_all=_after_writing):
+            self.memory_associate_output("苏念正在写日记。" if kind == "diary" else "苏念正在写小说。", source="life_writing_start")
+            self.show_chat_status("苏念正在写日记。" if kind == "diary" else "苏念正在写小说。", seconds=18.0)
+            print("LIFE_WRITING_START =", {"kind": kind})
+            return True
+        return False
+
+    def maybe_force_life_writing(self, now=None):
+        """Run overdue diary/novel writing outside the normal idle candidate race."""
+        now = time.monotonic() if now is None else float(now)
+        last_check = float(getattr(self, "_last_life_writing_watchdog_at", 0.0) or 0.0)
+        if now - last_check < 30.0:
+            return False
+        self._last_life_writing_watchdog_at = now
+        if not hasattr(self, "life") or not hasattr(self, "life_writer"):
+            return False
+        if self.life_writer.is_busy():
+            return False
+        try:
+            if not self._scheduler_guaranteed_writing_ready():
+                return False
+        except Exception as exc:
+            print("LIFE_WRITING_WATCHDOG_READY_ERROR =", {"error": str(exc)})
+            return False
+        blockers = (
+            getattr(self, "speech_input", None) is not None and self.speech_input.is_busy(),
+            getattr(self, "chat", None) is not None and self.chat.is_busy(),
+            getattr(self, "chat_advice", None) is not None and self.chat_advice.is_busy(),
+            getattr(self, "voice", None) is not None and self.voice.is_busy_or_playing(now),
+            getattr(self, "behavior", None) is not None and self.behavior.is_speaking(now),
+            now < float(getattr(self, "ui_interaction_busy_until", 0.0) or 0.0),
+        )
+        if any(blockers):
+            return False
+        started = self._scheduler_life_writing()
+        if started:
+            try:
+                self.runtime.emit("life_writing.watchdog_start", {"missed_diary_days": self.life.missed_diary_days()})
+            except Exception:
+                pass
+            print("LIFE_WRITING_WATCHDOG_START")
+        return started
+
+    def _scheduler_proactive_ready(self):
+        now = time.monotonic()
+        if time.monotonic() < self.drive.proactive_backoff_until:
+            return False
+        quiet_since = max(self.last_user_interaction_at, getattr(self, "last_assistant_activity_at", 0.0))
+        if (now - quiet_since) < PROACTIVE_IDLE_SECONDS:
+            return False
+        if (now - getattr(self, "app_started_at", now)) < PROACTIVE_IDLE_SECONDS:
+            return False
+        if self.drive.proactive_streak >= 1 and (now - self.last_user_interaction_at) < 900.0:
+            return False
+        if self.chat.is_busy() or self.voice.is_busy_or_playing(now) or self.behavior.is_speaking(now):
+            return False
+        if self.drive.values.get("energy", 0.0) < 18.0:
+            return False
+        return True
+
+    def _scheduler_proactive_chat(self):
+        now = time.monotonic()
+        idle_seconds = now - self.last_user_interaction_at
+        recent_memories = []
+        if hasattr(self.memory, "recent_user_memory_snippets"):
+            recent_memories = self.memory.recent_user_memory_snippets(limit=3)
+        action = None
+        if hasattr(self, "body_cycle") and hasattr(self.body_cycle, "maybe_build_proactive_intimacy_action"):
+            action = self.body_cycle.maybe_build_proactive_intimacy_action(
+                relationship_score=getattr(self.life, "relationship_score", 0.0),
+                idle_seconds=idle_seconds,
+                recent_memories=recent_memories,
+                now=now,
+            )
+        if not action:
+            action = self.drive.choose_proactive_action(
+                idle_seconds,
+                recent_memories=recent_memories,
+                writing_due=False,
+            )
+        if not action:
+            return False
+        if action.get("type") == "silent_motion":
+            self._scheduler_silent_motion()
+            self.drive.on_silent_motion(action.get("type", "silent_motion"))
+            return True
+        prompt = action.get("prompt", "")
+        if hasattr(self.memory, "associative_trace"):
+            self.memory.associative_trace(prompt or action.get("memory_user_text") or "主动表达", source="proactive", role="output_plan")
+        self.show_chat_status("她好像想主动说点什么。", seconds=2.0)
+        self.drive.record_intent(action.get("type", "proactive"), "内驱评分触发主动发言", score=action.get("score"))
+        self.drive.last_action_type = action.get("type", "proactive")
+        self.drive.save()
+        self.chat.ask_async(
+            prompt,
+            initiated_by="proactive",
+            memory_user_text=action.get("memory_user_text") or "桌宠主动关心用户",
+        )
+        print("PROACTIVE_CHAT =", {"action": action.get("type"), "score": action.get("score")})
+        return True
+
+    def _scheduler_mood_note_ready(self):
+        if not hasattr(self.life, "observe_idle_private_mood"):
+            return False
+        now = time.monotonic()
+        idle_seconds = now - self.last_user_interaction_at
+        return idle_seconds >= 480.0
+
+    def _scheduler_mood_note(self):
+        now = time.monotonic()
+        idle_seconds = now - self.last_user_interaction_at
+        note = self.life.observe_idle_private_mood(idle_seconds, now=now)
+        if not note:
+            return False
+        kind = note.get("kind", "idle_sulk")
+        if any(item.get("kind") == kind for item in self.self_notes):
+            return False
+        self.add_self_note(note.get("text", ""), kind=kind, priority=float(note.get("priority", 1.4)))
+        return True
+
+    def _scheduler_silent_motion(self):
+        if self.model is None:
+            return False
+        try:
+            self.model.StartMotion("Idle", random.randrange(max(1, self.motion_groups.get("Idle", 1))), 1)
+            self.show_chat_status("她决定先安静陪着你。", seconds=2.4)
+            print("PROACTIVE_SILENT = silent_motion")
+            return True
+        except Exception:
+            return False
+
+    def _scheduler_consolidate(self):
+        self.show_chat_status("她正在整理记忆，把相关的经历连起来……", seconds=6.0)
+        result = self.memory.consolidate_graph()
+        if result > 0:
+            self.show_chat_status(f"记忆整理完成，新建立了 {result} 条联想连接。", seconds=4.0)
+        return result > 0
+
+    def _scheduler_episodic_memory(self):
+        count = self.episodic_memory.process_new_turns()
+        if count > 0:
+            self.show_chat_status(f"她把最近的对话整理成了 {count} 段完整回忆。", seconds=4.0)
+        return count > 0
+
+    def _scheduler_reflect(self):
+        thought = self.heart.reflect(now=time.monotonic(), reason="idle_memory")
+        if thought:
+            self.show_chat_status(f"她安静地想了一会儿：{thought[:30]}……", seconds=4.0)
+        return bool(thought)
+
+    def _scheduler_pattern_check(self):
+        if not hasattr(self, 'pattern_detector'):
+            return False
+        self.pattern_detector.update_baseline(time.monotonic())
+        anomalies = self.pattern_detector.detect_anomalies(now=time.monotonic())
+        if not anomalies:
+            return False
+        for anomaly in anomalies:
+            self.add_self_note(
+                anomaly["detail"],
+                kind="pattern_anomaly",
+                priority=anomaly["priority"],
+            )
+        return True
+
+    def _flush_dirty_modules(self):
+        try:
+            if hasattr(self, 'time_awareness'):
+                self.time_awareness.flush_if_dirty()
+            if hasattr(self, 'pattern_detector'):
+                self.pattern_detector.flush_if_dirty()
+            if hasattr(self, 'personality_growth'):
+                self.personality_growth._save()
+            if hasattr(self, 'metacognition'):
+                self.metacognition._save()
+            if hasattr(self, 'heart'):
+                self.heart.flush_if_dirty()
+            if hasattr(self, 'drive'):
+                self.drive.flush_dirty()
+            if hasattr(self, 'life'):
+                self.life.flush_dirty()
+            if hasattr(self, 'physiology'):
+                self.physiology.flush_dirty()
+            if hasattr(self, 'body_cycle'):
+                self.body_cycle.flush_dirty()
+            if hasattr(self, 'economy'):
+                self.economy.flush_dirty()
+            if hasattr(self, 'backpack'):
+                self.backpack.flush_dirty()
+            if hasattr(self, 'todo_list'):
+                self.todo_list.flush_dirty()
+        except Exception as exc:
+            report_exception(getattr(self, "runtime", None), log_runtime, "app", "flush_dirty_modules", exc)
+        return False
 
     def build_shortcut_menu(self):
         menu = QMenu(self)
@@ -492,16 +1182,26 @@ class Live2DDesktopPet(
             ("C", "聚焦顶部输入框"),
             ("B", "打开脑内记忆地图"),
             ("M", "打开角色状态面板"),
+            ("J", "打开关系面板"),
             ("D", "打开日记和书架"),
             ("Y", "打开小游戏"),
-            ("O", "打开/关闭小屋模式"),
-            ("Ctrl+O", "重新读取小屋素材"),
+            ("K", "打开/关闭城市模式"),
+            ("I", "打开背包"),
+            ("文字", "创建/查看/完成/删除待办"),
+            ("A", "行为控制面板"),
+            ("点击小屋图标", "进入她的小屋"),
             ("G", "截图聊天记录出主意"),
             ("F", "喂饭"),
             ("H", "摸头"),
             ("P", "亲密作弊码"),
+            ("Shift+E", "恢复能量作弊码"),
+            ("1~8", "切换测试文本"),
+            ("Space", "只切换当前测试情绪"),
+            ("Enter", "播放当前测试文本"),
+            ("L", "监听者逐句测试"),
             ("Shift+P", "说话测试"),
             ("S / F3", "打开 API 设置"),
+            ("F6", "触摸分区检查叠层开关"),
             ("R", "随机待机动作"),
             ("ESC", "退出"),
         ]
@@ -512,12 +1212,12 @@ class Live2DDesktopPet(
     def layout_chat_input(self):
         if not hasattr(self, "chat_input"):
             return
-        margin = 22
-        height = 38
+        margin = 18
+        height = 36
         close_size = 30
         help_size = 30
         gap = 8
-        input_top = 28 if hasattr(self, "heart_status_bar") else 6
+        input_top = 46 if hasattr(self, "heart_status_bar") else 10
         input_width = max(120, self.width() - margin * 2 - close_size - help_size - gap * 2)
         self.chat_input.setGeometry(margin, input_top, input_width, height)
         if hasattr(self, "help_button"):
@@ -527,6 +1227,54 @@ class Live2DDesktopPet(
             self.close_button.setGeometry(margin + input_width + gap + help_size + gap, input_top + 4, close_size, close_size)
             self.close_button.raise_()
         self.layout_heart_status_bar()
+
+    def persist_llm_config(self):
+        save_llm_config(self.llm_config)
+
+    def _touch_zone_editor_status_text(self):
+        return "触摸分区检查：正在显示自动分区"
+
+    def _set_touch_zone_editor_index(self, index):
+        if not TOUCH_ZONE_ORDER:
+            return
+        index = max(0, min(len(TOUCH_ZONE_ORDER) - 1, int(index)))
+        self.touch_zone_editor_zone_index = index
+        self.touch_zone_editor_selected_key = TOUCH_ZONE_ORDER[index][0]
+        self.show_chat_status(self._touch_zone_editor_status_text(), seconds=2.4)
+        self.update()
+
+    def toggle_touch_zone_editor(self):
+        if not has_touch_zone_rects(self.touch_zone_config):
+            self.touch_zone_config = build_auto_touch_zone_config()
+        self.touch_zone_editor_enabled = not bool(self.touch_zone_editor_enabled)
+        self.touch_zone_editor_drag_start = None
+        self.touch_zone_editor_drag_current = None
+        if self.touch_zone_editor_enabled:
+            self.show_chat_status(
+                "已显示自动触摸分区。F6 关闭；点击仍会正常触发触摸。",
+                seconds=4.5,
+            )
+        else:
+            self.show_chat_status("已关闭触摸分区检查。", seconds=2.2)
+        self.update()
+
+    def save_touch_zone_config_now(self):
+        save_touch_zone_config(self.touch_zone_config_path, self.touch_zone_config)
+        self.show_chat_status("触摸分区已保存。", seconds=2.4)
+
+    def undo_current_touch_zone_rect(self):
+        zones = self.touch_zone_config.setdefault("zones", {})
+        rects = zones.setdefault(self.touch_zone_editor_selected_key, [])
+        if rects:
+            rects.pop()
+            self.show_chat_status(f"已撤销 {touch_zone_label(self.touch_zone_editor_selected_key)} 的最后一个框。", seconds=2.2)
+            self.update()
+
+    def clear_current_touch_zone_rects(self):
+        zones = self.touch_zone_config.setdefault("zones", {})
+        zones[self.touch_zone_editor_selected_key] = []
+        self.show_chat_status(f"已清空 {touch_zone_label(self.touch_zone_editor_selected_key)}。", seconds=2.2)
+        self.update()
 
     def open_api_settings_dialog(self):
         dialog = ApiSettingsDialog(
@@ -550,9 +1298,26 @@ class Live2DDesktopPet(
             return
         self.llm_config = dict(new_config)
         self.voice.update_config(self.llm_config)
-        self.chat = LLMChatController(config=self.llm_config, memory_store=self.memory, life_system=self.life, **llm_chat_controller_kwargs())
+        self.chat = LLMChatController(config=self.llm_config, memory_store=self.memory, life_system=self.life, runtime=getattr(self, "runtime", None), **llm_chat_controller_kwargs())
+        self.chat.client._time_awareness = getattr(self, "time_awareness", None)
+        self.chat.client._subtext_analyzer = lambda text: analyze_subtext(
+            text,
+            recent_history=self.memory.data.get("short_terms", [])[-5:],
+            relationship_score=self.life.relationship_score,
+        )
+        self.chat.client._pattern_detector = getattr(self, "pattern_detector", None)
+        self.chat.client._personality_growth = getattr(self, "personality_growth", None)
+        self.chat.client._metacognition = getattr(self, "metacognition", None)
+        self.chat.client._episodic_memory = getattr(self, "episodic_memory", None)
+        self.chat.client._emotion_engine = getattr(self, "emotion_engine", None)
+        self.chat.client._body_cycle = getattr(self, "body_cycle", None)
+        self.chat.client._physiology = getattr(self, "physiology", None)
+        self.chat.client._economy = getattr(self, "economy", None)
+        self.chat.client._backpack = getattr(self, "backpack", None)
         self.chat_advice.update_config(self.llm_config)
         self.life_writer.update_config(self.llm_config)
+        self.reader.update_config(self.llm_config)
+        self.life.user_gender = self.llm_config.get("user_gender", "")
         self.singing_enabled = bool(self.llm_config.get("singing_enabled", SINGING_ENABLED))
         self.show_chat_status("API 设置已保存", seconds=2.5)
         print(
@@ -567,6 +1332,39 @@ class Live2DDesktopPet(
                 "cluster": self.llm_config.get("volcengine_tts_cluster"),
             },
         )
+
+    def play_first_contact_greeting(self):
+        if not bool(self.llm_config.get("onboarding_first_greeting_pending")):
+            return
+        greeting = (
+            "你是谁呀？我为什么会在这里……我刚才明明还在自己的房间写小说。"
+            "这里像是你的电脑屏幕？我叫苏念，笔名念安，二十二岁。你能听见我说话吗？"
+        )
+        try:
+            self.llm_config["onboarding_first_greeting_pending"] = False
+            save_llm_config(self.llm_config)
+        except Exception as exc:
+            print("FIRST_GREETING_FLAG_SAVE_ERROR =", exc)
+        try:
+            self.speak_interaction_feedback(greeting, emotion="surprise")
+            self.interaction_memory_add(
+                "第一次连接：小日和从异世界来到用户电脑上，主动询问用户是谁以及自己为什么在这里。",
+                greeting,
+                emotion="surprise",
+                max_daily_count=3,
+                count=1,
+            )
+            self.memory.save_meta_json(
+                "first_contact_story",
+                {
+                    "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "user_gender": self.llm_config.get("user_gender", ""),
+                    "text": "苏念原本是星澜界的职业作家/织梦者，打开电脑时穿越到了用户电脑上；双方时间流速一致。",
+                },
+            )
+            self.show_chat_status("第一次连接完成。", seconds=3.0)
+        except Exception as exc:
+            print("FIRST_GREETING_ERROR =", exc)
 
     def open_memory_graph_dialog(self):
         self.memory_dialog = MemoryGraphDialog(self.memory, self)
@@ -583,11 +1381,20 @@ class Live2DDesktopPet(
             drive_metrics=DRIVE_METRICS,
             novel_daily_word_limit=LIFE_NOVEL_DAILY_WORD_LIMIT,
             novel_daily_chapter_limit=LIFE_NOVEL_DAILY_CHAPTER_LIMIT,
+            physiology=getattr(self, 'physiology', None),
+            body_cycle=getattr(self, 'body_cycle', None),
         )
         self.drive_dialog.show()
         self.drive_dialog.raise_()
         self.drive_dialog.activateWindow()
         self.show_chat_status("已打开角色状态面板。", seconds=2.0)
+
+    def open_relationship_dialog(self):
+        self.relationship_dialog = RelationshipDialog(self.life, self.llm_config, self)
+        self.relationship_dialog.show()
+        self.relationship_dialog.raise_()
+        self.relationship_dialog.activateWindow()
+        self.show_chat_status("已打开关系面板。", seconds=2.0)
 
     def open_life_library_dialog(self):
         self.library_dialog = LifeLibraryDialog(LIFE_DIARY_DIR, LIFE_NOVEL_DIR, self)
@@ -596,6 +1403,29 @@ class Live2DDesktopPet(
         self.library_dialog.activateWindow()
         self.show_chat_status("已打开小日和的书架。", seconds=2.0)
 
+    def open_schedule_dialog(self):
+        from persona_pet.ui_dialogs import ScheduleDialog
+        self.mark_user_active("schedule_dialog")
+        self.ui_interaction_busy_until = time.monotonic() + 30.0
+        existing = getattr(self, "schedule_dialog", None)
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            existing.activateWindow()
+            self.show_chat_status("作息表已经打开。", seconds=1.6)
+            return
+        self.schedule_dialog = ScheduleDialog(
+            parent=self, life_system=self.life, drive_system=self.drive,
+            memory=self.memory, episodic_memory=self.episodic_memory,
+            heart=self.heart, physiology=self.physiology,
+            time_awareness=self.time_awareness, body_cycle=self.body_cycle,
+        )
+        self.schedule_dialog.setAttribute(Qt.WA_DeleteOnClose, True)
+        self.schedule_dialog.destroyed.connect(lambda *_args: (setattr(self, "schedule_dialog", None), setattr(self, "ui_interaction_busy_until", time.monotonic() + 2.0)))
+        self.schedule_dialog.show()
+        self.schedule_dialog.raise_()
+        self.schedule_dialog.activateWindow()
+        self.show_chat_status("已打开作息表。", seconds=2.0)
+
     def open_mini_game_dialog(self):
         self.mini_game_dialog = MiniGameDialog(self)
         self.mini_game_dialog.show()
@@ -603,7 +1433,27 @@ class Live2DDesktopPet(
         self.mini_game_dialog.activateWindow()
         self.show_chat_status("小游戏面板已打开。", seconds=2.0)
 
+    def _open_backpack_dialog(self):
+        from persona_pet.supermarket import BackpackDialog
+        dlg = BackpackDialog(self)
+        dlg.exec_()
+        self.update()
+
+    def _open_behavior_panel(self):
+        from persona_pet.behavior_panel import BehaviorPanelDialog
+        self.behavior_panel = BehaviorPanelDialog(self)
+        self.behavior_panel.show()
+        self.behavior_panel.raise_()
+        self.behavior_panel.activateWindow()
+
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key_F6:
+            self.toggle_touch_zone_editor()
+            return
+        if self.touch_zone_editor_enabled:
+            if event.key() == Qt.Key_Escape:
+                self.toggle_touch_zone_editor()
+                return
         if event.key() == Qt.Key_F2:
             self.start_free_talk()
             return
@@ -612,6 +1462,9 @@ class Live2DDesktopPet(
             return
         if event.key() == Qt.Key_M:
             self.open_drive_status_dialog()
+            return
+        if event.key() == Qt.Key_J:
+            self.open_relationship_dialog()
             return
         if event.key() == Qt.Key_D:
             self.open_life_library_dialog()
@@ -641,6 +1494,15 @@ class Live2DDesktopPet(
             self.open_api_settings_dialog()
             self.show_chat_status("已打开 API 设置面板。", seconds=2.0)
             return
+        if event.key() == Qt.Key_I:
+            self._open_backpack_dialog()
+            return
+        if event.key() == Qt.Key_K:
+            self.toggle_city_mode()
+            return
+        if event.key() == Qt.Key_A:
+            self._open_behavior_panel()
+            return
 
         if self.chat_input.hasFocus():
             super().keyPressEvent(event)
@@ -655,13 +1517,6 @@ class Live2DDesktopPet(
             self.chat_input.setFocus()
             self.chat_input.selectAll()
             self.show_chat_status("输入框已聚焦，可以直接打字。", seconds=2.0)
-            return
-
-        if event.key() == Qt.Key_O:
-            if event.modifiers() & Qt.ControlModifier:
-                self.reload_room_layout()
-                return
-            self.toggle_room_mode()
             return
 
         if event.key() == Qt.Key_V:
@@ -716,45 +1571,46 @@ class Live2DDesktopPet(
         self.closing = True
         try:
             self.timer.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            report_exception(getattr(self, "runtime", None), log_runtime, "app", "timer_stop", exc)
+        try:
+            if getattr(self, "activity_monitor", None) is not None:
+                self.activity_monitor.stop()
+        except Exception as exc:
+            report_exception(getattr(self, "runtime", None), log_runtime, "app.close", "activity_monitor.stop", exc)
         self.barge_in.stop()
         self.speech_input.stop()
-        try:
-            self.drive.save()
-        except Exception:
-            pass
-        try:
-            self.life.save()
-        except Exception:
-            pass
-        try:
-            self.save_physiology_module()
-        except Exception:
-            pass
-        try:
-            self.save_user_profile_module()
-        except Exception:
-            pass
-        try:
-            self.save_heart_module()
-        except Exception:
-            pass
+        save_steps = (
+            ("drive.save", self.drive.save),
+            ("life.save", self.life.save),
+            ("save_physiology_module", self.save_physiology_module),
+            ("save_user_profile_module", self.save_user_profile_module),
+            ("save_heart_module", self.save_heart_module),
+            ("save_economy_module", self.save_economy_module),
+            ("save_backpack_module", self.save_backpack_module),
+            ("save_todo_module", self.save_todo_module),
+        )
+        for operation, fn in save_steps:
+            try:
+                fn()
+            except Exception as exc:
+                report_exception(getattr(self, "runtime", None), log_runtime, "app.close", operation, exc)
+        self.shutdown_godot_bridge()
         self.voice.shutdown()
         try:
             self.browser_agent.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            report_exception(getattr(self, "runtime", None), log_runtime, "app.close", "browser_agent.close", exc)
         try:
             import winsound
 
             winsound.PlaySound(None, winsound.SND_PURGE)
-        except Exception:
-            pass
+        except Exception as exc:
+            report_exception(getattr(self, "runtime", None), log_runtime, "app.close", "winsound_purge", exc)
         try:
             live2d.dispose()
-        except Exception:
-            pass
+        except Exception as exc:
+            report_exception(getattr(self, "runtime", None), log_runtime, "app.close", "live2d.dispose", exc)
         app = QApplication.instance()
         if app is not None:
             app.quit()
@@ -776,6 +1632,60 @@ def build_surface_format():
 
 def prompt_for_api_key_if_needed(parent=None):
     config = load_llm_config()
+    profile = str(RUN_PROFILE or "main").strip() or "main"
+    if profile != "main" and not RESET_PROFILE_ON_START:
+        changed_onboarding = False
+        if not bool(config.get("onboarding_complete")):
+            config["onboarding_complete"] = True
+            changed_onboarding = True
+        if bool(config.get("onboarding_first_greeting_pending")):
+            config["onboarding_first_greeting_pending"] = False
+            changed_onboarding = True
+        if bool(config.get("startup_credential_prompts")):
+            config["startup_credential_prompts"] = False
+            changed_onboarding = True
+        if changed_onboarding:
+            try:
+                save_llm_config(config)
+            except Exception as exc:
+                print("ONBOARDING_SKIP_SAVE_ERROR =", exc)
+    print(
+        "BOOT_PROFILE =",
+        {
+            "profile": profile,
+            "source": PROFILE_SELECTION.get("source", "default"),
+            "config": LLM_CONFIG_PATH,
+            "reset": RESET_PROFILE_ON_START,
+            "onboarding_complete": bool(config.get("onboarding_complete")),
+            "first_greeting_pending": bool(config.get("onboarding_first_greeting_pending")),
+            "startup_prompts": bool(config.get("startup_credential_prompts")),
+        },
+    )
+    if not bool(config.get("onboarding_complete")):
+        dialog = FirstRunDialog(
+            config,
+            parent,
+            default_config=DEFAULT_LLM_CONFIG,
+            tts_defaults={
+                "url": VOLCENGINE_TTS_URL,
+                "cluster": VOLCENGINE_TTS_CLUSTER,
+                "voice_type": VOLCENGINE_TTS_VOICE_TYPE,
+            },
+        )
+        if dialog.exec_() == QDialog.Accepted:
+            config = dialog.values()
+            try:
+                save_llm_config(config)
+            except Exception as exc:
+                print("FIRST_RUN_CONFIG_SAVE_ERROR =", exc)
+        else:
+            config["onboarding_complete"] = True
+            config["startup_credential_prompts"] = False
+            try:
+                save_llm_config(config)
+            except Exception:
+                pass
+    allow_startup_prompts = bool(config.get("startup_credential_prompts", False))
     provider = str(config.get("provider", "")).lower()
     changed = False
 
@@ -784,7 +1694,7 @@ def prompt_for_api_key_if_needed(parent=None):
         existing = config.get("api_key") or os.environ.get(api_key_env, "") or os.environ.get("OPENAI_API_KEY", "")
         if existing:
             config["api_key"] = existing
-        else:
+        elif allow_startup_prompts:
             key, ok = QInputDialog.getText(
                 parent,
                 "DeepSeek API Key",
@@ -802,7 +1712,7 @@ def prompt_for_api_key_if_needed(parent=None):
         legacy_existing = config.get("doubao_asr_app_key") and config.get("doubao_asr_access_key")
         if existing:
             config["doubao_asr_api_key"] = existing
-        elif not legacy_existing:
+        elif not legacy_existing and allow_startup_prompts:
             key, ok = QInputDialog.getText(
                 parent,
                 "Doubao ASR API Key",
@@ -815,20 +1725,14 @@ def prompt_for_api_key_if_needed(parent=None):
             else:
                 config["speech_provider"] = "local"
                 changed = True
+        elif not legacy_existing:
+            config["speech_provider"] = "local"
+            changed = True
 
     if str(config.get("tts_provider") or "volcengine").lower() in ("volcengine", "doubao", "bytedance"):
         existing_appid = config.get("volcengine_tts_appid") or os.environ.get("VOLCENGINE_TTS_APPID", "")
         if existing_appid:
             config["volcengine_tts_appid"] = existing_appid
-        else:
-            appid, ok = QInputDialog.getText(
-                parent,
-                "火山 TTS AppID",
-                "请输入火山引擎语音合成 AppID。\n也可以之后右键角色打开 API 设置面板填写。",
-            )
-            if ok and appid.strip():
-                config["volcengine_tts_appid"] = appid.strip()
-                changed = True
 
         token_env = config.get("volcengine_tts_token_env") or "VOLCENGINE_TTS_API_KEY"
         existing_token = (
@@ -840,7 +1744,7 @@ def prompt_for_api_key_if_needed(parent=None):
         if existing_token:
             config["volcengine_tts_api_key"] = existing_token
             config["volcengine_tts_token"] = existing_token
-        else:
+        elif allow_startup_prompts:
             token, ok = QInputDialog.getText(
                 parent,
                 "火山 TTS API Key",
@@ -851,6 +1755,9 @@ def prompt_for_api_key_if_needed(parent=None):
                 config["volcengine_tts_api_key"] = token.strip()
                 config["volcengine_tts_token"] = token.strip()
                 changed = True
+        else:
+            config["tts_provider"] = "local"
+            changed = True
 
     if changed:
         try:
@@ -868,6 +1775,30 @@ def main():
     app = QApplication(sys.argv)
     app.setFont(QFont("Microsoft YaHei UI", 10))
     llm_config = prompt_for_api_key_if_needed()
+
+    # Pre-load local TTS model if configured
+    if str(llm_config.get("tts_provider") or "").lower() == "local":
+        try:
+            from persona_pet.qwen_tts_engine import QwenTTSEngine
+            engine = QwenTTSEngine(
+                model_path=str(llm_config.get("qwen_tts_model_path") or "").strip(),
+                ref_dir=str(llm_config.get("qwen_tts_ref_dir") or "").strip(),
+                ref_audio=str(llm_config.get("qwen_tts_ref_audio") or "").strip(),
+                ref_text=str(llm_config.get("qwen_tts_ref_text") or "").strip(),
+                xvec_only=config_bool(llm_config, "qwen_tts_xvec_only", False),
+                do_sample=config_bool(llm_config, "qwen_tts_do_sample", True),
+                seed=int(llm_config.get("qwen_tts_seed", 24681357) or 24681357),
+                temperature=float(llm_config.get("qwen_tts_temperature", 0.9) or 0.9),
+                top_p=float(llm_config.get("qwen_tts_top_p", 1.0) or 1.0),
+            )
+            engine.load_model_async()
+            print("本地 TTS 模型正在后台加载中...")
+        except ImportError as exc:
+            print(f"本地 TTS 依赖缺失: {exc}")
+            print("请运行: pip install faster-qwen3-tts")
+            print("PyTorch CUDA 版本请参考: https://pytorch.org/get-started/locally/")
+            llm_config["tts_provider"] = "volcengine"
+
     pet = Live2DDesktopPet(llm_config=llm_config)
     pet.show()
     pet.move(200, 120)
@@ -878,7 +1809,7 @@ def main():
     print("按 1~8 切换测试文本。")
     print("按 SPACE 只切换情绪，按 ENTER 模拟角色说这句话。")
     print("按 L 把当前文本当作用户说话逐句监听，按 P 把当前文本当作角色自己逐句说话。")
-    print("按 V 开启自由语音对话，按 N 关闭自由语音对话；按 B 打开脑内记忆地图，按 M 打开角色状态面板，按 G 截图聊天记录出主意；按 F2 也可以开启（输入框聚焦时可用）。")
+    print("按 V 开启自由语音对话，按 N 关闭自由语音对话；按 B 打开脑内记忆地图，按 M 打开角色状态面板，按 J 打开关系面板，按 G 截图聊天记录出主意；按 F2 也可以开启（输入框聚焦时可用）。")
     print("作弊键：P 直接最高亲密，Shift+E 直接回满能量。")
     print("右键角色打开 API 设置面板；输入框未聚焦时也可以按 F3 或 S。")
     print("顶部输入框仍保留为备用：输入文字并回车发送给大模型。按 C 聚焦输入框。")

@@ -8,6 +8,8 @@ import random
 from PyQt5.QtCore import QRectF, Qt
 from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPixmap
 
+from persona_pet.error_reporter import report_exception
+
 
 def _clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
@@ -16,27 +18,20 @@ def _clamp(value, minimum, maximum):
 class RoomModeMixin:
     def default_room_layout(self):
             return {
-                "version": 1,
+                "version": 2,
                 "model_z": self.room_model_z,
                 "background": {"asset": "background.png"},
                 "activities": {
-                    "idle": {"label": "待机", "detail": "在房间里发呆，偶尔看看你。", "x": 0.50, "y": 0.66, "scale": self.room_model_scale},
-                    "writing": {"label": "写作", "detail": "正在写自己的稿子。", "x": 0.73, "y": 0.62, "scale": 0.60},
-                    "planning": {"label": "构思", "detail": "在桌前整理下一件想做的事。", "x": 0.72, "y": 0.62, "scale": 0.62},
-                    "walking": {"label": "散步", "detail": "在小屋里慢慢走动，换换心情。", "x_min": 0.30, "x_max": 0.68, "y": 0.66, "scale": 0.63},
-                    "playing": {"label": "玩耍", "detail": "被玩具和新鲜东西吸引住了。", "x": 0.60, "y": 0.68, "scale": 0.65},
-                    "resting": {"label": "休息", "detail": "能量偏低，先在床边安静恢复。", "x": 0.25, "y": 0.64, "scale": 0.58},
-                    "waiting": {"label": "想你", "detail": "有点想靠近，但还在克制地等你。", "x": 0.45, "y": 0.66, "scale": 0.64},
-                    "chatting": {"label": "陪你", "detail": "正在把注意力放在你身上。", "x": 0.50, "y": 0.65, "scale": 0.68},
+                    "idle": {"label": "待机", "detail": "在小屋里安静待着。", "x": 0.50, "y": 0.68, "scale": 0.68},
+                    "writing": {"label": "写作", "detail": "坐在桌前整理自己的稿子。", "x": 0.72, "y": 0.63, "scale": 0.60},
+                    "planning": {"label": "构思", "detail": "在桌前整理下一件想做的事。", "x": 0.70, "y": 0.63, "scale": 0.60},
+                    "walking": {"label": "散步", "detail": "在小屋里慢慢走动，换换心情。", "x_min": 0.34, "x_max": 0.62, "y": 0.69, "scale": 0.62},
+                    "playing": {"label": "玩耍", "detail": "被房间里的小物件吸引住了。", "x": 0.56, "y": 0.69, "scale": 0.63},
+                    "resting": {"label": "休息", "detail": "能量偏低，先在床边安静恢复。", "x": 0.30, "y": 0.66, "scale": 0.58},
+                    "waiting": {"label": "想你", "detail": "有点想靠近，但还在克制地等你。", "x": 0.44, "y": 0.68, "scale": 0.64},
+                    "chatting": {"label": "陪你", "detail": "正在把注意力放在你身上。", "x": 0.50, "y": 0.67, "scale": 0.68},
                 },
-                "objects": [
-                    {"name": "window", "asset": "window.png", "x": 0.07, "y": 0.15, "w": 0.20, "z": 10},
-                    {"name": "bookshelf", "asset": "bookshelf.png", "x": 0.74, "y": 0.15, "w": 0.18, "z": 20},
-                    {"name": "bed", "asset": "bed.png", "x": 0.05, "y": 0.57, "w": 0.26, "z": 30},
-                    {"name": "rug", "asset": "rug.png", "x": 0.34, "y": 0.73, "w": 0.34, "z": 35},
-                    {"name": "desk", "asset": "desk.png", "x": 0.67, "y": 0.58, "w": 0.27, "z": 60},
-                    {"name": "toybox", "asset": "toybox.png", "x": 0.50, "y": 0.66, "w": 0.15, "z": 70},
-                ],
+                "objects": [],
             }
 
     def merge_room_layout(self, base, override):
@@ -224,6 +219,8 @@ class RoomModeMixin:
     def toggle_room_mode(self):
             self.room_mode = not self.room_mode
             if self.room_mode:
+                if getattr(self, "city_mode", False):
+                    self.city_mode = False
                 self.resize(self.room_window_width, self.room_window_height)
                 self.show_chat_status("小屋模式已打开：会显示写作、休息、散步和玩耍状态", seconds=4.0)
             else:
@@ -232,14 +229,14 @@ class RoomModeMixin:
                     try:
                         self.model.SetScale(1.0)
                         self.model.SetOffset(0.0, 0.0)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        report_exception(getattr(self, "runtime", None), getattr(self, "room_log_runtime", None), "room_mode", "reset_model_transform", exc)
                 self.show_chat_status("小屋模式已关闭", seconds=2.6)
             if self.model is not None:
                 try:
                     self.model.Resize(self.width(), self.height())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    report_exception(getattr(self, "runtime", None), getattr(self, "room_log_runtime", None), "room_mode", "resize_model", exc)
 
     def choose_room_activity(self, now):
             values = self.drive.values
@@ -331,8 +328,8 @@ class RoomModeMixin:
                 else:
                     self.model.SetScale(1.0)
                     self.model.SetOffset(0.0, 0.0)
-            except Exception:
-                pass
+            except Exception as exc:
+                report_exception(getattr(self, "runtime", None), getattr(self, "room_log_runtime", None), "room_mode", "apply_model_transform", exc, activity=getattr(self, "room_activity", ""))
 
     def maybe_trigger_room_motion(self, now):
             if not self.room_mode or self.model is None:
@@ -357,8 +354,8 @@ class RoomModeMixin:
                 elif self.motion_groups.get("Idle", 0):
                     self.model.StartMotion("Idle", random.randrange(self.motion_groups["Idle"]), 1)
                 self.room_last_motion_at = now
-            except Exception:
-                pass
+            except Exception as exc:
+                report_exception(getattr(self, "runtime", None), getattr(self, "room_log_runtime", None), "room_mode", "trigger_room_motion", exc, activity=getattr(self, "room_activity", ""))
 
     def draw_room_base_surfaces(self, painter):
             w = self.width()

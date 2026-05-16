@@ -3,12 +3,19 @@ import base64
 import json
 import math
 import os
+import re
 import sys
 import time
 import uuid
 import urllib.request
+import warnings
 import wave
 from pathlib import Path
+
+# Suppress torchaudio/ffmpeg warnings
+warnings.filterwarnings("ignore", message=".*ffmpeg.*")
+os.environ.setdefault("TORCHAUDIO_USE_SOX", "0")
+os.environ.setdefault("TORCHAUDIO_USE_BACKEND_DISPATCHER", "1")
 
 import numpy as np
 
@@ -142,45 +149,55 @@ def record_adaptive(
     return output_path, stats
 
 
-def transcribe(wav_path, model_size, model_dir):
-    from faster_whisper import WhisperModel
+_sensevoice_model = None
 
-    try:
-        model = WhisperModel(
-            model_size,
-            device="cuda",
-            compute_type="int8_float16",
-            download_root=str(model_dir),
-        )
-    except Exception:
-        model = WhisperModel(
-            model_size,
-            device="cpu",
-            compute_type="int8",
-            download_root=str(model_dir),
-        )
 
-    segments, _info = model.transcribe(
-        str(wav_path),
-        language="zh",
-        vad_filter=True,
-        vad_parameters={
-            "min_silence_duration_ms": 280,
-            "speech_pad_ms": 220,
-        },
-        beam_size=8,
-        best_of=8,
-        temperature=0.0,
-        condition_on_previous_text=False,
-        initial_prompt="以下是中文口语对话，请根据上下文识别同音字和近音字，输出自然的简体中文。",
+def _get_sensevoice_model():
+    global _sensevoice_model
+    if _sensevoice_model is not None:
+        return _sensevoice_model
+    import torch
+    from funasr import AutoModel
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    _sensevoice_model = AutoModel(
+        model="iic/SenseVoiceSmall",
+        vad_model="fsmn-vad",
+        punc_model="ct-punc",
+        device=device,
+        disable_update=True,
     )
-    return "".join(segment.text for segment in segments).strip()
+    return _sensevoice_model
+
+
+def transcribe(wav_path, model_size, model_dir):
+    model = _get_sensevoice_model()
+    result = model.generate(
+        input=str(wav_path),
+        cache={},
+        language="auto",
+        use_itn=True,
+        batch_size_s=60,
+    )
+    if not result:
+        return ""
+    # result is a list of dicts with 'text' key
+    texts = []
+    for item in result:
+        text = str(item.get("text", "")).strip()
+        if text:
+            # SenseVoice prepends tags like <|zh|><|NEUTRAL|><|Speech|><|withtn|>
+            text = re.sub(r"<\s*\|[^|]*\|\s*>", "", text).strip()
+            texts.append(text)
+    return "".join(texts)
 
 
 def extract_text_from_doubao_payload(payload):
     if not isinstance(payload, (dict, list)):
         return ""
     candidates = []
+
+    def text_key(value):
+        return re.sub(r"[\s,，。！？?！、~～….\-]+", "", value or "")
 
     def walk(value, key=""):
         if isinstance(value, dict):
@@ -195,7 +212,31 @@ def extract_text_from_doubao_payload(payload):
                 candidates.append(text)
 
     walk(payload)
-    return "".join(candidates).strip()
+    unique = []
+    seen = set()
+    for text in candidates:
+        key = text_key(text)
+        if key and key not in seen:
+            unique.append(text)
+            seen.add(key)
+    if not unique:
+        return ""
+    if len(unique) == 1:
+        return unique[0].strip()
+
+    keyed = [(text, text_key(text)) for text in unique]
+    full_text, full_key = max(keyed, key=lambda item: len(item[1]))
+    if full_key and all(key in full_key for _text, key in keyed if key != full_key):
+        return full_text.strip()
+
+    parts = []
+    joined_key = ""
+    for text, key in keyed:
+        if not key or key in joined_key:
+            continue
+        parts.append(text)
+        joined_key += key
+    return "".join(parts).strip()
 
 
 def transcribe_doubao(wav_path, config):
@@ -270,6 +311,7 @@ def main():
     parser.add_argument("--silence-rms", type=float, default=0.008)
     parser.add_argument("--start-timeout", type=float, default=2.5)
     parser.add_argument("--chunk-ms", type=int, default=40)
+    parser.add_argument("--record-only", action="store_true", help="Only record audio, skip transcription")
     args = parser.parse_args()
 
     try:
@@ -287,32 +329,36 @@ def main():
             )
         else:
             wav_path, stats = record(args.seconds, args.sample_rate, Path(args.out))
-        provider = args.asr_provider
-        if provider == "auto":
-            provider = str(config.get("speech_provider") or "local").lower()
-        if provider in ("volcengine", "bytedance"):
-            provider = "doubao"
 
-        asr_error = ""
-        try:
-            if provider == "doubao":
-                text = transcribe_doubao(wav_path, config)
-                used_provider = "doubao"
-            else:
-                text = transcribe(wav_path, args.model_size, Path(args.model_dir))
-                used_provider = "local"
-        except Exception as exc:
-            if provider == "doubao" and not args.no_local_fallback:
-                asr_error = str(exc)
-                text = transcribe(wav_path, args.model_size, Path(args.model_dir))
-                used_provider = "local_fallback"
-            else:
-                raise
+        if args.record_only:
+            payload = {"ok": True, "text": "", "wav_path": str(wav_path), "audio_stats": stats, "record_only": True}
+        else:
+            provider = args.asr_provider
+            if provider == "auto":
+                provider = str(config.get("speech_provider") or "local").lower()
+            if provider in ("volcengine", "bytedance"):
+                provider = "doubao"
 
-        stats["asr_provider"] = used_provider
-        if asr_error:
-            stats["asr_fallback_reason"] = asr_error[:240]
-        payload = {"ok": True, "text": text, "wav_path": str(wav_path), "audio_stats": stats}
+            asr_error = ""
+            try:
+                if provider == "doubao":
+                    text = transcribe_doubao(wav_path, config)
+                    used_provider = "doubao"
+                else:
+                    text = transcribe(wav_path, args.model_size, Path(args.model_dir))
+                    used_provider = "local"
+            except Exception as exc:
+                if provider == "doubao" and not args.no_local_fallback:
+                    asr_error = str(exc)
+                    text = transcribe(wav_path, args.model_size, Path(args.model_dir))
+                    used_provider = "local_fallback"
+                else:
+                    raise
+
+            stats["asr_provider"] = used_provider
+            if asr_error:
+                stats["asr_fallback_reason"] = asr_error[:240]
+            payload = {"ok": True, "text": text, "wav_path": str(wav_path), "audio_stats": stats}
     except Exception as exc:
         payload = {"ok": False, "text": "", "wav_path": args.out, "error": str(exc)}
 
@@ -321,5 +367,41 @@ def main():
     return 0 if payload.get("ok") else 1
 
 
+def persistent_mode():
+    """Long-running mode: keep model loaded, accept WAV paths via stdin."""
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    model = _get_sensevoice_model()
+    # Signal ready
+    sys.stdout.write(json.dumps({"ready": True}) + "\n")
+    sys.stdout.flush()
+    for line in sys.stdin:
+        line = line.strip()
+        if not line or line == "quit":
+            break
+        try:
+            req = json.loads(line)
+            wav_path = req.get("wav_path", "")
+            if not wav_path:
+                raise ValueError("missing wav_path")
+            t0 = time.perf_counter()
+            result = model.generate(input=wav_path, cache={}, language="auto", use_itn=True, batch_size_s=60)
+            elapsed = time.perf_counter() - t0
+            texts = []
+            for item in result:
+                text = str(item.get("text", "")).strip()
+                text = re.sub(r"<\s*\|[^|]*\|\s*>", "", text).strip()
+                if text:
+                    texts.append(text)
+            payload = {"ok": True, "text": "".join(texts), "wav_path": wav_path, "audio_stats": {"asr_provider": "sensevoice", "elapsed": round(elapsed, 3)}}
+        except Exception as exc:
+            payload = {"ok": False, "text": "", "error": str(exc)}
+        sys.stdout.write(json.dumps(payload, ensure_ascii=True) + "\n")
+        sys.stdout.flush()
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    if "--persistent" in sys.argv:
+        persistent_mode()
+    else:
+        raise SystemExit(main())

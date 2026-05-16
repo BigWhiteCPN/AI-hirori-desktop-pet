@@ -3,3 +3,5 @@ live2d-py
 numpy
 sounddevice
 faster-whisper
+faster-qwen3-tts
+sentence-transformers

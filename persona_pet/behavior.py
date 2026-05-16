@@ -68,27 +68,6 @@ TEST_TEXTS = {
     Qt.Key_8: "我先想一下这个问题。刚才确实有点生气，但我不想一直这样。我们慢慢说清楚，好吗？",
 }
 
-TEST_VOICEVOX_LINES = {
-    Qt.Key_1: "ひゃあっ……こ、ここは危ないのだ……！",
-    Qt.Key_2: "えへへっ！今日はすっごく楽しいのだー！",
-    Qt.Key_3: "うう……ちょっと悲しくなっちゃったのだ……。",
-    Qt.Key_4: "むむっ！これはさすがに怒っちゃうのだ！",
-    Qt.Key_5: "わあっ！？びっくりしたのだー！",
-    Qt.Key_6: "うんうん、今日はのんびりできそうなのだ。",
-    Qt.Key_7: "むむっ……ちょっと怒ったけど、もう大丈夫なのだ。",
-    Qt.Key_8: "うん……少し考えてから、ゆっくり話すのだ。",
-}
-
-VOICEVOX_LINES_BY_EMOTION = {
-    "joy": "えへへっ！すっごくうれしいのだー！",
-    "sadness": "うう……ちょっとかなしいのだ……。",
-    "anger": "むむっ！ちょっと怒ってるのだ！",
-    "fear": "ひゃあっ……こ、こわいのだ……！",
-    "surprise": "わあっ！？びっくりしたのだー！",
-    "neutral": "うんうん、そうなのだ。",
-}
-VOICEVOX_STOCK_LINES = set(VOICEVOX_LINES_BY_EMOTION.values())
-
 EMOTION_LEXICON = {
     "joy": {
         "开心": 1.00,
@@ -437,16 +416,16 @@ def apply_emotion_override(analysis, emotion):
         return analysis
     weights = dict(analysis.weights)
     current = weights.get(emotion, 0.0)
-    weights[emotion] = max(current, 0.58)
-    weights["neutral"] = min(weights.get("neutral", 0.0), 0.34)
+    weights[emotion] = max(current, 0.70)
+    weights["neutral"] = min(weights.get("neutral", 0.0), 0.25)
     for other in EMOTION_ORDER:
         if other != emotion:
             weights[other] = min(weights.get(other, 0.0), 0.18)
     return EmotionAnalysis(
         weights=weights,
-        intensity=max(analysis.intensity, 0.42),
+        intensity=max(analysis.intensity, 0.55),
         dominant=emotion,
-        speaking_energy=max(analysis.speaking_energy, 0.58),
+        speaking_energy=max(analysis.speaking_energy, 0.65),
         matched_tokens=list(analysis.matched_tokens),
     )
 
@@ -530,12 +509,16 @@ def reconcile_llm_emotion(user_text, reply_text, llm_emotion):
     if requested_emotion:
         return requested_emotion, "user_request"
 
-    reply_emotion = dominant_weight_emotion(primary_dominant_analysis(analyze_text_to_emotion(reply_text)))
-    if reply_emotion != "neutral" and reply_emotion != llm_emotion:
-        return reply_emotion, "reply_text"
     if llm_emotion in LLM_EMOTIONS:
-        return llm_emotion, ""
-    return reply_emotion, "reply_text"
+        reply_analysis = primary_dominant_analysis(analyze_text_to_emotion(reply_text))
+        reply_emotion = dominant_weight_emotion(reply_analysis)
+        if llm_emotion != "neutral":
+            return llm_emotion, "llm_primary"
+        if reply_emotion != "neutral" and reply_analysis.intensity >= 0.38:
+            return reply_emotion, "reply_text_strong"
+        return llm_emotion, "llm_neutral"
+    reply_emotion = dominant_weight_emotion(primary_dominant_analysis(analyze_text_to_emotion(reply_text)))
+    return reply_emotion, "reply_text_fallback"
 
 
 def llm_emotion_from_text(text):
@@ -694,6 +677,8 @@ class BehaviorController:
         self.pending_residue_motion = None
         self.residue_ready_at = 0.0
         self.residue_played = True
+        self._current_motion_group = ""
+        self._current_motion_index = -1
 
     def set_analysis(self, model, analysis, text="", role=DIALOGUE_ROLE_LISTENER, force=False, motion_key_override=None):
         self.analysis = analysis
@@ -738,8 +723,28 @@ class BehaviorController:
             self.analysis = analysis
             self.speaking_energy = analysis.speaking_energy
         self.speech_started_at = time.monotonic()
-        self.speech_duration = clamp(duration, 0.35, 12.0)
+        self.speech_duration = clamp(duration, 0.35, 30.0)
         self.speech_seed = random.uniform(0.0, math.tau)
+        self.speech_talk_rate = clamp(7.8 + 16.0 / max(self.speech_duration, 0.5), 8.2, 14.8)
+        self.mouth_enabled = MOUTH_ENABLE_FOR_SPEAKER
+
+    def extend_speech_to_audio(self, duration, analysis=None):
+        if duration <= 0.0:
+            return
+        now = time.monotonic()
+        if analysis is not None:
+            self.analysis = analysis
+            self.speaking_energy = analysis.speaking_energy
+
+        current_end = self.speech_started_at + self.speech_duration
+        if not self.is_speaking(now):
+            self.speech_started_at = now
+            self.speech_duration = clamp(duration, 0.35, 120.0)
+            self.speech_seed = random.uniform(0.0, math.tau)
+        else:
+            queued_end = max(current_end, now) + duration
+            self.speech_duration = clamp(queued_end - self.speech_started_at, 0.35, 120.0)
+
         self.speech_talk_rate = clamp(7.8 + 16.0 / max(self.speech_duration, 0.5), 8.2, 14.8)
         self.mouth_enabled = MOUTH_ENABLE_FOR_SPEAKER
 
@@ -752,6 +757,16 @@ class BehaviorController:
         self.speech_duration = 0.0
         self.speaking_energy = 0.0
         self.mouth_enabled = False
+
+    def suspend_motion_for_attention(self, model, now=None, hold_seconds=1.4):
+        now = time.monotonic() if now is None else float(now)
+        self.pending_residue_motion = None
+        self.residue_ready_at = 0.0
+        self.residue_played = True
+        self.next_idle_motion_at = max(self.next_idle_motion_at, now + max(0.2, float(hold_seconds or 0.0)))
+        self.last_motion_at = now
+        print("MOTION_SOFT_SUSPEND_FOR_ATTENTION =", {"hold_seconds": round(float(hold_seconds or 0.0), 2)})
+        return True
 
     def build_mouth_overlay(self, progress, envelope):
         if not self.mouth_enabled:
@@ -848,6 +863,8 @@ class BehaviorController:
         try:
             result = model.StartMotion(group, index, priority)
             self.last_motion_at = now
+            self._current_motion_group = group
+            self._current_motion_index = index
             self.schedule_residue(now, dominant, motion_key)
             if self.residue_played:
                 self.next_idle_motion_at = now + random.uniform(*IDLE_MOTION_INTERVAL)
@@ -912,11 +929,14 @@ class BehaviorController:
         except Exception:
             pass
 
-    def maybe_trigger_idle_motion(self, model, now):
+    def maybe_trigger_idle_motion(self, model, now, attention=0.0):
         if model is None:
             return
         self.maybe_trigger_residue_motion(model, now)
         if self.is_speaking(now):
+            return
+        if float(attention or 0.0) >= 0.08:
+            self.next_idle_motion_at = max(self.next_idle_motion_at, now + 1.2)
             return
         if now < self.next_idle_motion_at:
             return
@@ -932,21 +952,25 @@ class BehaviorController:
 
         self.next_idle_motion_at = now + random.uniform(*IDLE_MOTION_INTERVAL)
 
-    def build_overlay_params(self, now):
+    def build_overlay_params(self, now, attention=0.0):
         analysis = self.analysis
         intensity = analysis.intensity
         activation = 1.0 - analysis.weights["neutral"]
+        attention = max(0.0, min(1.0, float(attention or 0.0)))
+        head_idle_scale = 1.0 - attention * 0.86
+        eye_idle_scale = 1.0 - attention * 0.97
+        body_idle_scale = 1.0 - attention * 0.52
 
         phase = now * (0.8 + activation * 0.5) + self.idle_seed
         overlay = {
-            StandardParams.ParamAngleX: math.sin(phase) * (1.1 + activation * 1.7),
-            StandardParams.ParamAngleY: math.sin(phase * 1.31 + 0.8) * (0.8 + activation * 1.3),
-            StandardParams.ParamAngleZ: math.sin(phase * 0.92 - 0.4) * (0.6 + activation * 1.0),
-            PARAM_BODY_ANGLE_X: math.sin(phase * 0.72) * (0.8 + activation * 1.1),
-            PARAM_BODY_ANGLE_Y: math.sin(phase * 1.05 + 1.5) * (0.6 + activation * 1.0),
-            PARAM_BODY_ANGLE_Z: math.sin(phase * 0.56 + 2.0) * (0.4 + activation * 0.8),
-            StandardParams.ParamEyeBallX: math.sin(phase * 0.48) * 0.06,
-            StandardParams.ParamEyeBallY: math.sin(phase * 0.63 + 0.5) * 0.04,
+            StandardParams.ParamAngleX: math.sin(phase) * (1.1 + activation * 1.7) * head_idle_scale,
+            StandardParams.ParamAngleY: math.sin(phase * 1.31 + 0.8) * (0.8 + activation * 1.3) * head_idle_scale,
+            StandardParams.ParamAngleZ: math.sin(phase * 0.92 - 0.4) * (0.6 + activation * 1.0) * head_idle_scale,
+            PARAM_BODY_ANGLE_X: math.sin(phase * 0.72) * (0.8 + activation * 1.1) * body_idle_scale,
+            PARAM_BODY_ANGLE_Y: math.sin(phase * 1.05 + 1.5) * (0.6 + activation * 1.0) * body_idle_scale,
+            PARAM_BODY_ANGLE_Z: math.sin(phase * 0.56 + 2.0) * (0.4 + activation * 0.8) * body_idle_scale,
+            StandardParams.ParamEyeBallX: math.sin(phase * 0.48) * 0.06 * eye_idle_scale,
+            StandardParams.ParamEyeBallY: math.sin(phase * 0.63 + 0.5) * 0.04 * eye_idle_scale,
             PARAM_HAIR_AHOGE: math.sin(phase * 1.8) * (0.4 + activation * 0.7),
         }
 
@@ -976,10 +1000,10 @@ class BehaviorController:
 
         return overlay
 
-    def update(self, model):
+    def update(self, model, attention=0.0):
         now = time.monotonic()
-        self.maybe_trigger_idle_motion(model, now)
-        return self.build_overlay_params(now)
+        self.maybe_trigger_idle_motion(model, now, attention=attention)
+        return self.build_overlay_params(now, attention=attention)
 
 
 def clamp_params(params):
@@ -1004,7 +1028,10 @@ def compose_params(base_params, overlay_params):
 
 def apply_params(model, params):
     for pid, value in params.items():
-        model.SetParameterValue(pid, value, 1)
+        try:
+            model.SetParameterValue(pid, value, 1)
+        except Exception:
+            pass
 
 
 

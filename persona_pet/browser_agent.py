@@ -6,6 +6,9 @@ import re
 import time
 from dataclasses import dataclass
 
+from persona_pet.error_reporter import report_exception
+from persona_pet.tool_permissions import audit_tool_event, assess_tool_action
+
 @dataclass
 class BrowserAgentAction:
     kind: str
@@ -60,8 +63,8 @@ def browser_agent_log(event, payload, log_path=None, logger=None):
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             with open(log_path, "a", encoding="utf-8") as handle:
                 handle.write(time.strftime("%Y-%m-%d %H:%M:%S ") + event + " " + json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    except Exception as exc:
+        report_exception(logger=logger, component="browser_agent", operation="write_log", exc=exc, event=event)
     if logger:
         logger(f"BROWSER_AGENT_{event}", payload)
 
@@ -143,11 +146,12 @@ def describe_browser_agent_action(action):
     return "未知浏览器动作"
 
 class SafeBrowserAgent:
-    def __init__(self, profile_dir, screenshot_dir, log_path=None, logger=None):
+    def __init__(self, profile_dir, screenshot_dir, log_path=None, logger=None, runtime=None):
         self.profile_dir = profile_dir
         self.screenshot_dir = screenshot_dir
         self.log_path = log_path
         self.logger = logger
+        self.runtime = runtime
         self.playwright = None
         self.context = None
         self.page = None
@@ -205,6 +209,22 @@ class SafeBrowserAgent:
         return ""
 
     def execute(self, action):
+        decision = assess_tool_action("browser_agent", action.kind, text=action.text or action.target, runtime=self.runtime)
+        if not decision.allowed:
+            audit_tool_event(
+                self.runtime,
+                "reject",
+                "browser_agent",
+                {"action": action.kind, "reason": decision.reason, "risk": decision.risk},
+                level="warning",
+            )
+            raise RuntimeError(f"Browser agent action rejected: {decision.reason}")
+        audit_tool_event(
+            self.runtime,
+            "start",
+            "browser_agent",
+            {"action": action.kind, "target": action.target[:120], "risk": decision.risk, "preview": decision.preview},
+        )
         page = self.ensure_page()
         if action.kind == "open_url":
             if not re.match(r"^https?://", action.target, flags=re.I):
@@ -229,8 +249,8 @@ class SafeBrowserAgent:
 
         try:
             page.wait_for_load_state("domcontentloaded", timeout=3000)
-        except Exception:
-            pass
+        except Exception as exc:
+            report_exception(self.runtime, self.logger, "browser_agent", "wait_for_load_state", exc, action=action.kind)
         screenshot_path = self.screenshot(page)
         result = {
             "kind": action.kind,
@@ -241,6 +261,7 @@ class SafeBrowserAgent:
             "profile": self.profile_dir,
         }
         browser_agent_log("EXECUTE", result, log_path=self.log_path, logger=self.logger)
+        audit_tool_event(self.runtime, "done", "browser_agent", {"action": action.kind, "url": page.url, "title": page.title()})
         return result
 
     def close(self):
@@ -253,6 +274,6 @@ class SafeBrowserAgent:
             if self.playwright:
                 try:
                     self.playwright.stop()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    report_exception(self.runtime, self.logger, "browser_agent", "playwright_stop", exc)
                 self.playwright = None
