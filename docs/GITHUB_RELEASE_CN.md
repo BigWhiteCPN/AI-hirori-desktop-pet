@@ -48,7 +48,7 @@ Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
 
 ## 本地 TTS 模型
 
-项目里的本地 TTS 基于 `faster-qwen3-tts`，推荐使用 `Qwen/Qwen3-TTS-12Hz-0.6B-Base`。
+项目里的本地 TTS 基于 `faster-qwen3-tts`，`Qwen/Qwen3-TTS-12Hz-0.6B-Base` 和 `Qwen/Qwen3-TTS-12Hz-1.7B-Base` 都可以用。
 
 环境前提：
 
@@ -64,7 +64,7 @@ Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
 ```json
 {
   "tts_provider": "local",
-  "qwen_tts_model_path": "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+  "qwen_tts_model_path": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 }
 ```
 
@@ -74,20 +74,20 @@ Hugging Face CLI：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -U "huggingface_hub[cli]"
-huggingface-cli download Qwen/Qwen3-TTS-12Hz-0.6B-Base --local-dir .\third_party\qwen_tts_model
+huggingface-cli download Qwen/Qwen3-TTS-12Hz-1.7B-Base --local-dir .\third_party\qwen_tts_model
 ```
 
 ModelScope：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -U modelscope
-modelscope download --model Qwen/Qwen3-TTS-12Hz-0.6B-Base --local_dir .\third_party\qwen_tts_model
+modelscope download --model Qwen/Qwen3-TTS-12Hz-1.7B-Base --local_dir .\third_party\qwen_tts_model
 ```
 
 参考来源：
 
 - Qwen `qwen-tts` PyPI 页面提供了 Hugging Face / ModelScope 下载命令
-- Hugging Face 模型页 `Qwen/Qwen3-TTS-12Hz-0.6B-Base` 说明了这个模型支持参考音频语音克隆
+- Hugging Face 模型页 `Qwen/Qwen3-TTS-12Hz-1.7B-Base` 说明了这个模型支持参考音频语音克隆
 
 ### 默认目录
 
@@ -98,6 +98,24 @@ modelscope download --model Qwen/Qwen3-TTS-12Hz-0.6B-Base --local_dir .\third_pa
 - 参考文本：`third_party/qwen_tts_refs/neutral.txt`
 
 此时只需要把 `tts_provider` 改成 `local`，其余本地 TTS 路径字段可以继续留空。
+
+## 本地语音识别
+
+当前项目默认语音识别是云端豆包：
+
+- `speech_provider = "doubao"`
+
+这种模式不需要下载本地语音识别模型。
+
+如果改成：
+
+- `speech_provider = "local"`
+
+项目会使用 `faster-whisper`，并在首次加载时把模型下载到：
+
+- `third_party/faster_whisper/`
+
+当前代码默认本地识别模型大小是 `small`，也可以通过环境变量 `PERSONA_SPEECH_MODEL` 切换。
 
 ## 上传前检查
 

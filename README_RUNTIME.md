@@ -23,6 +23,8 @@ Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
 - 如果使用默认项目目录结构，本地 TTS 模型放在 `third_party/qwen_tts_model/`
 - 参考音频和文本放在 `third_party/qwen_tts_refs/neutral.wav` 与 `neutral.txt`
 - 本地 TTS 按 `faster-qwen3-tts` 官方说明需要 Python 3.10+、PyTorch 2.5.1+、NVIDIA GPU 和 CUDA
+- 语音识别默认是 `speech_provider = "doubao"`，不需要下载本地识别模型
+- 如果改成 `speech_provider = "local"`，项目会在首次使用时自动下载 `faster-whisper` 模型到 `third_party/faster_whisper/`
 
 ## 必要文件
 
@@ -38,14 +40,14 @@ Hugging Face CLI：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -U "huggingface_hub[cli]"
-huggingface-cli download Qwen/Qwen3-TTS-12Hz-0.6B-Base --local-dir .\third_party\qwen_tts_model
+huggingface-cli download Qwen/Qwen3-TTS-12Hz-1.7B-Base --local-dir .\third_party\qwen_tts_model
 ```
 
 ModelScope：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -U modelscope
-modelscope download --model Qwen/Qwen3-TTS-12Hz-0.6B-Base --local_dir .\third_party\qwen_tts_model
+modelscope download --model Qwen/Qwen3-TTS-12Hz-1.7B-Base --local_dir .\third_party\qwen_tts_model
 ```
 
 ## 本地生成物

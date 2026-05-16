@@ -40,9 +40,14 @@ Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
 
 ## 本地模型
 
-项目里的本地 TTS 使用 `faster-qwen3-tts`，底层模型是 Qwen3-TTS。当前最适合这个项目的入门选项是 `Qwen/Qwen3-TTS-12Hz-0.6B-Base`，它支持参考音频语音克隆。
+项目里的本地 TTS 使用 `faster-qwen3-tts`，底层模型是 Qwen3-TTS。代码支持你直接填写不同的 Qwen3-TTS 模型名或本地目录，`0.6B` 和 `1.7B` 都可以用。
 
 本地 TTS 不是“零门槛 CPU 模式”。按 `faster-qwen3-tts` 官方说明，它至少需要 Python 3.10+、PyTorch 2.5.1+、NVIDIA GPU 和 CUDA。
+
+建议：
+
+- 显存和加载速度优先：`Qwen/Qwen3-TTS-12Hz-0.6B-Base`
+- 质量优先并且显存更充足：`Qwen/Qwen3-TTS-12Hz-1.7B-Base`
 
 ### 方案一：首次运行时自动下载
 
@@ -51,7 +56,7 @@ Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
 ```json
 {
   "tts_provider": "local",
-  "qwen_tts_model_path": "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+  "qwen_tts_model_path": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 }
 ```
 
@@ -65,14 +70,14 @@ Hugging Face CLI：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -U "huggingface_hub[cli]"
-huggingface-cli download Qwen/Qwen3-TTS-12Hz-0.6B-Base --local-dir .\third_party\qwen_tts_model
+huggingface-cli download Qwen/Qwen3-TTS-12Hz-1.7B-Base --local-dir .\third_party\qwen_tts_model
 ```
 
 ModelScope：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -U modelscope
-modelscope download --model Qwen/Qwen3-TTS-12Hz-0.6B-Base --local_dir .\third_party\qwen_tts_model
+modelscope download --model Qwen/Qwen3-TTS-12Hz-1.7B-Base --local_dir .\third_party\qwen_tts_model
 ```
 
 然后准备参考音频和参考文本：
@@ -81,6 +86,20 @@ modelscope download --model Qwen/Qwen3-TTS-12Hz-0.6B-Base --local_dir .\third_pa
 - `third_party/qwen_tts_refs/neutral.txt`
 
 再把 `persona_llm_config.json` 里的 `tts_provider` 改成 `local` 即可。如果你使用上面的默认目录，`qwen_tts_model_path`、`qwen_tts_ref_dir`、`qwen_tts_ref_audio`、`qwen_tts_ref_text` 都可以继续留空。
+
+## 本地语音识别
+
+这个项目的语音识别有两种模式：
+
+- 云端模式：`speech_provider = "doubao"`，这是当前默认值，不需要下载本地识别模型
+- 本地模式：`speech_provider = "local"`，会使用 `faster-whisper`
+
+如果切到本地语音识别，项目会在第一次加载时自动下载 Whisper 模型到 `third_party/faster_whisper/`。当前代码默认模型大小是 `small`，也可以通过环境变量 `PERSONA_SPEECH_MODEL` 改成别的规格，例如 `base`、`small`、`medium`。
+
+也就是说：
+
+- 默认 API 语音识别：不需要额外下载本地 ASR 模型
+- 想离线本地识别：需要下载 `faster-whisper` 对应模型，通常首次运行自动完成
 
 ### 参考音频要求
 
