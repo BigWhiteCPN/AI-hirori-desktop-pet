@@ -5,8 +5,7 @@ This repository is the local `person_test_all` AI desktop pet project. It is a s
 ## Run
 
 ```powershell
-cd E:\PythonProject1\pythonProject_1\person_test_all
-E:\PythonProject1\pythonProject_1\.venv\Scripts\python.exe .\persona_bot_test.py
+.\.venv\Scripts\python.exe .\persona_bot_test.py
 ```
 
 Use `run_persona_bot_test.bat` only as a convenience wrapper.
@@ -45,7 +44,7 @@ Use `run_persona_bot_test.bat` only as a convenience wrapper.
 For Python changes, start with:
 
 ```powershell
-E:\PythonProject1\pythonProject_1\.venv\Scripts\python.exe -m compileall persona_bot_test.py persona_pet
+.\.venv\Scripts\python.exe -m compileall persona_bot_test.py persona_pet
 ```
 
 For GUI, audio, Live2D, TTS, browser automation, or Godot bridge work, note what could not be fully verified without launching external/runtime components.

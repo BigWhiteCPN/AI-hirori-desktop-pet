@@ -17,29 +17,22 @@
 - 大模型和第三方本地引擎：`third_party/`、`.venv/`
 - 打包产物和缓存：`build/`、`dist/`、`__pycache__/`、`Microsoft/`
 
-当前 `.gitignore` 已经覆盖这些目录。上传前可以执行：
+## 路径原则
 
-```powershell
-git status --short --ignored
-```
-
-其中以 `!!` 开头的 `outputs/`、`logs/`、`persona_llm_config.json` 等就是被正确忽略的本地文件。
+- 仓库不要写死 `<drive>:\...` 这类机器专属路径
+- 文档命令优先使用相对路径，例如 `.\.venv\Scripts\python.exe`
+- 本地专属路径放进 `persona_llm_config.json`，不要放进公开模板和 README
 
 ## 新用户运行方式
 
-1. 克隆仓库并进入项目目录：
-
 ```powershell
-git clone <your-repo-url>
-cd person_test_all
-```
-
-2. 创建虚拟环境并安装依赖：
-
-```powershell
+git clone https://github.com/BigWhiteCPN/AI-hirori-desktop-pet.git
+cd AI-hirori-desktop-pet
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -U pip
 .\.venv\Scripts\python.exe -m pip install -r .\requirements_runtime.txt
+Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
+.\.venv\Scripts\python.exe .\persona_bot_test.py
 ```
 
 浏览器代理能力是可选项：
@@ -48,42 +41,68 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r .\requirements_browser_agent.txt
 ```
 
-3. 复制发布配置：
+## API 模型
 
-```powershell
-Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
+- 设置环境变量 `DEEPSEEK_API_KEY`，或在 `persona_llm_config.json` 中填写 `api_key`
+- 如使用豆包/火山语音服务，再设置 `DOUBAO_ASR_API_KEY` 和 `VOLCENGINE_TTS_API_KEY`
+
+## 本地 TTS 模型
+
+项目里的本地 TTS 基于 `faster-qwen3-tts`，推荐使用 `Qwen/Qwen3-TTS-12Hz-0.6B-Base`。
+
+环境前提：
+
+- Python 3.10+
+- PyTorch 2.5.1+
+- NVIDIA GPU
+- 可用的 CUDA 环境
+
+### 自动下载
+
+如果运行环境能访问 Hugging Face，可以直接在 `persona_llm_config.json` 中设置：
+
+```json
+{
+  "tts_provider": "local",
+  "qwen_tts_model_path": "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+}
 ```
 
-4. 选择一种模型配置方式。
+### 手动下载
 
-API 模型：
-
-- 设置环境变量 `DEEPSEEK_API_KEY`，或在右键/API 设置里填写 API Key。
-- 默认 `base_url` 是 `https://api.deepseek.com`，模型名可在 `persona_llm_config.json` 里调整。
-- 如使用火山/豆包语音，设置 `DOUBAO_ASR_API_KEY` 和 `VOLCENGINE_TTS_API_KEY`。
-
-本地 TTS 模型：
-
-- 把模型权重放到本机路径，例如 `third_party/qwen_tts_model/`。
-- 把参考音频和文本放到 `third_party/qwen_tts_refs/neutral.wav` 与 `neutral.txt`，或在 API 设置里填写自定义路径。
-- 在 `persona_llm_config.json` 中把 `tts_provider` 改为 `local`，并设置 `qwen_tts_model_path`。
-- 模型权重通常很大，不建议直接提交到 GitHub；需要发布时优先写下载链接或使用 Git LFS。
-
-5. 启动：
+Hugging Face CLI：
 
 ```powershell
-.\.venv\Scripts\python.exe .\persona_bot_test.py
+.\.venv\Scripts\python.exe -m pip install -U "huggingface_hub[cli]"
+huggingface-cli download Qwen/Qwen3-TTS-12Hz-0.6B-Base --local-dir .\third_party\qwen_tts_model
 ```
 
-也可以双击 `run_persona_bot_test.bat`。
+ModelScope：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -U modelscope
+modelscope download --model Qwen/Qwen3-TTS-12Hz-0.6B-Base --local_dir .\third_party\qwen_tts_model
+```
+
+参考来源：
+
+- Qwen `qwen-tts` PyPI 页面提供了 Hugging Face / ModelScope 下载命令
+- Hugging Face 模型页 `Qwen/Qwen3-TTS-12Hz-0.6B-Base` 说明了这个模型支持参考音频语音克隆
+
+### 默认目录
+
+如果按项目默认目录放置文件，可以少配很多参数：
+
+- 模型目录：`third_party/qwen_tts_model/`
+- 参考音频：`third_party/qwen_tts_refs/neutral.wav`
+- 参考文本：`third_party/qwen_tts_refs/neutral.txt`
+
+此时只需要把 `tts_provider` 改成 `local`，其余本地 TTS 路径字段可以继续留空。
 
 ## 上传前检查
 
 ```powershell
-git status --short
-git diff -- .gitignore persona_llm_config.release.json persona_pet/llm_config.py persona_pet/godot_bridge.py
-git add .gitignore .env.example persona_llm_config.release.json persona_pet/llm_config.py persona_pet/godot_bridge.py docs/GITHUB_RELEASE_CN.md
-git status --short
+git status --short --ignored
 ```
 
-确认 `persona_llm_config.json`、`persona_llm_config.test.json`、`outputs/`、`logs/` 没有出现在待提交列表里，再提交和推送。
+确认 `persona_llm_config.json`、`persona_llm_config.test.json`、`outputs/`、`logs/`、`third_party/` 没有出现在待提交列表里，再提交和推送。

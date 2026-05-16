@@ -46,7 +46,7 @@ class GodotBridgeMixin:
 
     def resolve_godot_executable(self):
         configured = str(getattr(self, "godot_executable", "") or "").strip()
-        candidates = [configured, DEFAULT_GODOT_EXE, r"E:\GODOT_4.5\Godot_v4.6.2-stable_win64.exe"]
+        candidates = [configured, DEFAULT_GODOT_EXE]
         for candidate in candidates:
             if candidate and os.path.isfile(candidate):
                 return candidate
