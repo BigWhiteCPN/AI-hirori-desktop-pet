@@ -24,7 +24,7 @@ Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
 - 参考音频和文本放在 `third_party/qwen_tts_refs/neutral.wav` 与 `neutral.txt`
 - 本地 TTS 按 `faster-qwen3-tts` 官方说明需要 Python 3.10+、PyTorch 2.5.1+、NVIDIA GPU 和 CUDA
 - 语音识别默认是 `speech_provider = "doubao"`，不需要下载本地识别模型
-- 如果改成 `speech_provider = "local"`，项目会在首次使用时自动下载 `faster-whisper` 模型到 `third_party/faster_whisper/`
+- 如果改成 `speech_provider = "local"`，项目会在首次使用时自动下载并缓存 `SenseVoiceSmall` 相关模型
 
 ## 必要文件
 

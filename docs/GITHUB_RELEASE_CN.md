@@ -111,11 +111,9 @@ modelscope download --model Qwen/Qwen3-TTS-12Hz-1.7B-Base --local_dir .\third_pa
 
 - `speech_provider = "local"`
 
-项目会使用 `faster-whisper`，并在首次加载时把模型下载到：
+项目会使用 `FunASR + iic/SenseVoiceSmall`，并在首次加载时自动下载并缓存相关模型文件。
 
-- `third_party/faster_whisper/`
-
-当前代码默认本地识别模型大小是 `small`，也可以通过环境变量 `PERSONA_SPEECH_MODEL` 切换。
+当前代码这条本地 ASR 路径不是 `faster-whisper`。
 
 ## 上传前检查
 

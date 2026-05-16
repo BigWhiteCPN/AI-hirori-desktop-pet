@@ -92,14 +92,14 @@ modelscope download --model Qwen/Qwen3-TTS-12Hz-1.7B-Base --local_dir .\third_pa
 这个项目的语音识别有两种模式：
 
 - 云端模式：`speech_provider = "doubao"`，这是当前默认值，不需要下载本地识别模型
-- 本地模式：`speech_provider = "local"`，会使用 `faster-whisper`
+- 本地模式：`speech_provider = "local"`，会使用 `FunASR + iic/SenseVoiceSmall`
 
-如果切到本地语音识别，项目会在第一次加载时自动下载 Whisper 模型到 `third_party/faster_whisper/`。当前代码默认模型大小是 `small`，也可以通过环境变量 `PERSONA_SPEECH_MODEL` 改成别的规格，例如 `base`、`small`、`medium`。
+如果切到本地语音识别，项目会在第一次加载时自动下载并缓存 `SenseVoiceSmall` 及其相关模型文件。当前这条本地 ASR 链路不是 `faster-whisper`。
 
 也就是说：
 
 - 默认 API 语音识别：不需要额外下载本地 ASR 模型
-- 想离线本地识别：需要下载 `faster-whisper` 对应模型，通常首次运行自动完成
+- 想离线本地识别：需要首次下载 `SenseVoiceSmall` 相关模型，通常首次运行自动完成
 
 ### 参考音频要求
 
