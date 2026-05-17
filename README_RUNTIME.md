@@ -16,6 +16,12 @@
 .\run_persona_bot_test.bat
 ```
 
+测试首次运行界面：
+
+```powershell
+.\run_first_run_test.bat
+```
+
 ## 我第一次接触时会怎么跑
 
 如果我是第一次接触这个项目，我会先走最小路径：

@@ -38,6 +38,7 @@ from persona_pet.voicevox import estimate_sentence_seconds
 
 class PetRenderMixin:
     def initializeGL(self):
+        success = False
         try:
             self.runtime_logger(
                 "LIVE2D_INIT",
@@ -57,10 +58,14 @@ class PetRenderMixin:
             self.model.SetAutoBreathEnable(True)
             self.model.SetAutoBlinkEnable(True)
             self.runtime_logger("LIVE2D_READY")
+            success = True
         except Exception:
             self.model = None
             self.runtime_logger("LIVE2D_INIT_ERROR", traceback.format_exc())
             self.show_chat_status("Live2D 加载失败，查看 logs/persona_pet.log", seconds=8.0)
+        finally:
+            if hasattr(self, "notify_startup_loading_done"):
+                QTimer.singleShot(0, lambda ok=success: self.notify_startup_loading_done(ok))
 
     def show_subtitle(self, text, voice_text="", duration=None):
         if hasattr(self, "memory_associate_output"):

@@ -41,6 +41,16 @@ Use `setup_persona_bot_test.bat` for first-run setup and `run_persona_bot_test.b
 - Treat file/browser agent code, path handling, local config, and API keys as security-sensitive.
 - Preserve current profile behavior unless asked. GitHub/new-user startup now defaults to `RUN_PROFILE = "main"`.
 
+## Encoding Rules
+
+- Treat `persona_bot_test.py` and related Python/UI files as `UTF-8`.
+- Do not trust mojibake shown in PowerShell or `cmd.exe` as the real source text.
+- Never paste terminal-rendered乱码 back into source files.
+- Before editing Chinese strings, read the real file contents through an explicit `UTF-8` path.
+- After changing Chinese UI text, scan for mojibake markers such as `鎸`, `濂`, `閸`, `鍏`, `锛`, `銆`, `€`.
+- If those markers appear in edited lines, fix the source text immediately before making further changes.
+- Prefer syntax-only validation for Python text repairs when writing `__pycache__` is blocked by the environment.
+
 ## Validation
 
 For Python changes, start with:

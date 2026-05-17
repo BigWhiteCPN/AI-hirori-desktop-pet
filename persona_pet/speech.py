@@ -65,6 +65,9 @@ class SpeechInputController:
         self.current_process = None
         self._persistent_proc = None
         self._persistent_lock = threading.Lock()
+        self._persistent_ready = False
+        self._persistent_loading = False
+        self._persistent_error = ""
 
     def is_busy(self):
         with self.lock:
@@ -96,10 +99,25 @@ class SpeechInputController:
                 )
         return self.model
 
+    def is_persistent_ready(self):
+        with self._persistent_lock:
+            proc = self._persistent_proc
+            running = proc is not None and proc.poll() is None
+            return bool(self._persistent_ready and running)
+
+    def is_persistent_loading(self):
+        with self._persistent_lock:
+            return bool(self._persistent_loading)
+
+    def persistent_error(self):
+        with self._persistent_lock:
+            return str(self._persistent_error or "")
+
     def _ensure_persistent(self):
         """Start the persistent SenseVoice subprocess if not running."""
         with self._persistent_lock:
             if self._persistent_proc is not None and self._persistent_proc.poll() is None:
+                self._persistent_ready = True
                 return True
             if getattr(sys, "frozen", False):
                 cmd = [sys.executable, "--speech-helper", "--persistent"]
@@ -133,15 +151,50 @@ class SpeechInputController:
                 else:
                     ready = {}
                 if ready.get("ready"):
+                    self._persistent_ready = True
+                    self._persistent_error = ""
                     self.logger("SPEECH_PERSISTENT_READY", {})
                     return True
                 else:
+                    self._persistent_ready = False
+                    self._persistent_error = str(ready or "")
                     self.logger("SPEECH_PERSISTENT_NOT_READY", ready)
                     return False
             except Exception as exc:
                 self.logger("SPEECH_PERSISTENT_START_ERROR", str(exc)[:200])
                 self._persistent_proc = None
+                self._persistent_ready = False
+                self._persistent_error = str(exc)
                 return False
+
+    def preload_persistent_async(self):
+        if not self.enabled:
+            return False
+        with self._persistent_lock:
+            if self._persistent_ready and self._persistent_proc is not None and self._persistent_proc.poll() is None:
+                return True
+            if self._persistent_loading:
+                return True
+            self._persistent_loading = True
+            self._persistent_error = ""
+
+        def worker():
+            success = False
+            try:
+                success = bool(self._ensure_persistent())
+            finally:
+                with self._persistent_lock:
+                    self._persistent_loading = False
+                    self._persistent_ready = bool(success)
+
+        self.runtime.run_background(
+            "speech_preload",
+            worker,
+            kind="audio",
+            resources=("speech_model_load",),
+            timeout=180,
+        )
+        return True
 
     def _transcribe_persistent(self, wav_path):
         """Send WAV path to persistent process and get transcription."""
@@ -175,6 +228,8 @@ class SpeechInputController:
                     except Exception:
                         pass
                 self._persistent_proc = None
+            self._persistent_ready = False
+            self._persistent_loading = False
 
     def write_wav(self, path, samples):
         import numpy as np

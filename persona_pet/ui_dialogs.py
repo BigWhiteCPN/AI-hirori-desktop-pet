@@ -32,8 +32,8 @@ class FirstRunDialog(QDialog):
         self.tts_defaults = dict(tts_defaults or {})
         self.setWindowTitle("第一次连接")
         self.setModal(True)
-        self.resize(540, 520)
-        self.setMinimumWidth(500)
+        self.resize(1240, 600)
+        self.setMinimumWidth(1160)
         self.fields = {}
         self.setStyleSheet(
             """
@@ -55,8 +55,8 @@ class FirstRunDialog(QDialog):
                 background: rgba(255, 255, 255, 218);
                 border: 1px solid rgba(235, 144, 188, 210);
                 border-radius: 10px;
-                margin-top: 16px;
-                padding: 16px 14px 12px 14px;
+                margin-top: 10px;
+                padding: 12px 14px 10px 14px;
                 font-weight: 700;
                 color: #8f2d5a;
             }
@@ -93,8 +93,8 @@ class FirstRunDialog(QDialog):
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(22, 14, 22, 18)
+        layout.setSpacing(4)
 
         title = QLabel("第一次连接")
         title.setObjectName("titleLabel")
@@ -134,13 +134,13 @@ class FirstRunDialog(QDialog):
         self.volcengine_fields_widget = QWidget()
         self.volcengine_fields_layout = QFormLayout(self.volcengine_fields_widget)
         self.volcengine_fields_layout.setContentsMargins(0, 0, 0, 0)
-        self.add_field(self.volcengine_fields_layout, "火山 TTS AppID", "volcengine_tts_appid", placeholder="cpn，可随便填一个短字符串")
-        appid_hint = QLabel("AppID 只是火山语音请求标识；没有服务商指定时，保留 cpn 或随便填一个英文短字符串即可。")
+        self.add_field(self.volcengine_fields_layout, "火山 TTS AppID", "volcengine_tts_appid", placeholder="user")
+        appid_hint = QLabel("AppID 只是火山语音请求标识；没有服务商指定时，填 user 或你自己的通用标识即可。")
         appid_hint.setObjectName("hintLabel")
         appid_hint.setWordWrap(True)
         self.volcengine_fields_layout.addRow("", appid_hint)
         self.add_field(self.volcengine_fields_layout, "豆包/火山 API Key", "voice_api_key", password=True)
-        self.add_field(self.volcengine_fields_layout, "音色 ID", "volcengine_tts_voice_type", placeholder=self.tts_defaults.get("voice_type", "S_zEdGPhR02"))
+        self.add_field(self.volcengine_fields_layout, "音色 ID", "volcengine_tts_voice_type", placeholder=self.tts_defaults.get("voice_type", ""))
         api_form.addRow("", self.volcengine_fields_widget)
 
         # Local TTS info
@@ -220,7 +220,7 @@ class FirstRunDialog(QDialog):
         if key == "voice_api_key":
             initial = self.config.get("doubao_asr_api_key") or self.config.get("volcengine_tts_api_key") or ""
         elif key == "volcengine_tts_appid":
-            initial = self.config.get(key) or self.default_config.get(key) or "cpn"
+            initial = self.config.get(key) or self.default_config.get(key) or "user"
         else:
             initial = self.config.get(key, self.default_config.get(key, "")) or ""
         field = QLineEdit(str(initial))
@@ -264,7 +264,7 @@ class FirstRunDialog(QDialog):
         if self.tts_local_radio.isChecked():
             data["tts_provider"] = "local"
         else:
-            appid = self.fields["volcengine_tts_appid"].text().strip() or "cpn"
+            appid = self.fields["volcengine_tts_appid"].text().strip() or "user"
             voice_key = self.fields["voice_api_key"].text().strip()
             voice_type = self.fields["volcengine_tts_voice_type"].text().strip() or self.tts_defaults.get("voice_type", "")
             if voice_key:
@@ -448,12 +448,12 @@ class ApiSettingsDialog(QDialog):
         self.volcengine_fields_widget = QWidget()
         ve_form = QFormLayout(self.volcengine_fields_widget)
         ve_form.setContentsMargins(0, 0, 0, 0)
-        self.add_field(ve_form, "AppID", "volcengine_tts_appid", placeholder="默认 cpn；没有服务商要求时可随便填")
+        self.add_field(ve_form, "AppID", "volcengine_tts_appid", placeholder="默认 user；没有服务商要求时可自定义")
         self.add_field(ve_form, "API Key", "volcengine_tts_api_key", password=True)
         self.add_field(ve_form, "Key 环境变量", "volcengine_tts_token_env", placeholder="VOLCENGINE_TTS_API_KEY")
         self.add_field(ve_form, "配音接口", "volcengine_tts_url", placeholder=self.tts_defaults.get("url", ""))
         self.add_field(ve_form, "Cluster", "volcengine_tts_cluster", placeholder="volcano_icl")
-        self.add_field(ve_form, "音色 ID", "volcengine_tts_voice_type", placeholder="S_zEdGPhR02")
+        self.add_field(ve_form, "音色 ID", "volcengine_tts_voice_type", placeholder="")
         tts_form.addRow("", self.volcengine_fields_widget)
 
         # Local TTS info
@@ -511,7 +511,7 @@ class ApiSettingsDialog(QDialog):
     def add_field(self, form, label, key, password=False, placeholder=""):
         initial = self.config.get(key, self.default_config.get(key, "")) or ""
         if key == "volcengine_tts_appid":
-            initial = initial or "cpn"
+            initial = initial or "user"
         field = QLineEdit(str(initial))
         field.setClearButtonEnabled(True)
         field.setPlaceholderText(str(placeholder or self.default_config.get(key, "")))
@@ -527,7 +527,7 @@ class ApiSettingsDialog(QDialog):
         elif key == "volcengine_tts_token_env":
             field.setPlaceholderText("VOLCENGINE_TTS_API_KEY")
         elif key == "volcengine_tts_appid":
-            field.setPlaceholderText("默认 cpn；没有服务商要求时可随便填")
+            field.setPlaceholderText("默认 user；没有服务商要求时可自定义")
         form.addRow(label, field)
         self.fields[key] = field
 
@@ -559,7 +559,7 @@ class ApiSettingsDialog(QDialog):
         provider = self.tts_provider_combo.currentData()
         data["tts_provider"] = provider
         if provider != "local":
-            data["volcengine_tts_appid"] = data.get("volcengine_tts_appid") or "cpn"
+            data["volcengine_tts_appid"] = data.get("volcengine_tts_appid") or "user"
             data["volcengine_tts_voice_type"] = data.get("volcengine_tts_voice_type") or self.tts_defaults.get("voice_type", "")
             data["volcengine_tts_cluster"] = data.get("volcengine_tts_cluster") or self.tts_defaults.get("cluster", "")
             data["volcengine_tts_url"] = data.get("volcengine_tts_url") or self.tts_defaults.get("url", "")

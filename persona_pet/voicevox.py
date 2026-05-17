@@ -106,7 +106,7 @@ SINGING_PROVIDER = "voicevox_chant"
 SINGING_EXTERNAL_COMMAND = ""
 SINGING_MAX_TEXT_CHARS = 72
 VOLCENGINE_TTS_URL = "https://openspeech.bytedance.com/api/v1/tts"
-VOLCENGINE_TTS_VOICE_TYPE = "S_zEdGPhR02"
+VOLCENGINE_TTS_VOICE_TYPE = ""
 VOLCENGINE_TTS_CLUSTER = "volcano_icl"
 VOLCENGINE_TTS_FORMAT = "wav"
 VOLCENGINE_TTS_RATE = 24000
@@ -539,13 +539,25 @@ class VoicevoxController:
                 ref_audio=ref_audio,
                 ref_text=ref_text,
                 xvec_only=config_bool(self.config, "qwen_tts_xvec_only", False),
-                do_sample=config_bool(self.config, "qwen_tts_do_sample", True),
+                do_sample=config_bool(self.config, "qwen_tts_do_sample", False),
                 seed=int(self.config.get("qwen_tts_seed", 24681357) or 24681357),
-                temperature=float(self.config.get("qwen_tts_temperature", 0.9) or 0.9),
-                top_p=float(self.config.get("qwen_tts_top_p", 1.0) or 1.0),
+                temperature=float(self.config.get("qwen_tts_temperature", 0.55) or 0.55),
+                top_p=float(self.config.get("qwen_tts_top_p", 0.85) or 0.85),
                 runtime=self.runtime,
             )
             engine.load_model_async()
+        else:
+            engine.update_paths(
+                resolve_project_path(BASE_DIR, self.config.get("qwen_tts_model_path")),
+                resolve_project_path(BASE_DIR, self.config.get("qwen_tts_ref_dir")),
+                resolve_project_path(BASE_DIR, self.config.get("qwen_tts_ref_audio")),
+                resolve_project_path(BASE_DIR, self.config.get("qwen_tts_ref_text")),
+                xvec_only=config_bool(self.config, "qwen_tts_xvec_only", False),
+                do_sample=config_bool(self.config, "qwen_tts_do_sample", False),
+                seed=int(self.config.get("qwen_tts_seed", 24681357) or 24681357),
+                temperature=float(self.config.get("qwen_tts_temperature", 0.55) or 0.55),
+                top_p=float(self.config.get("qwen_tts_top_p", 0.85) or 0.85),
+            )
         self.qwen_engine = engine
         return engine
 

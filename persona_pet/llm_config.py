@@ -98,7 +98,7 @@ def resolve_tesseract_cmd(base_dir, configured=""):
 def build_default_llm_config(
     volcengine_tts_url="https://openspeech.bytedance.com/api/v1/tts",
     volcengine_tts_cluster="volcano_icl",
-    volcengine_tts_voice_type="S_zEdGPhR02",
+    volcengine_tts_voice_type="",
     volcengine_tts_format="wav",
     volcengine_tts_rate=24000,
     singing_enabled=True,
@@ -127,7 +127,7 @@ def build_default_llm_config(
         "doubao_asr_url": "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash",
         "tts_provider": "volcengine",
         "volcengine_tts_url": volcengine_tts_url,
-        "volcengine_tts_appid": "cpn",
+        "volcengine_tts_appid": "user",
         "volcengine_tts_api_key": "",
         "volcengine_tts_token": "",
         "volcengine_tts_token_env": "VOLCENGINE_TTS_API_KEY",
