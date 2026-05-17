@@ -3,7 +3,9 @@ import math
 import os
 import random
 import shutil
+import subprocess
 import sys
+import tempfile
 import time
 
 faulthandler.enable()
@@ -12,7 +14,7 @@ os.environ["QT_OPENGL"] = "desktop"
 os.environ["QT_GL_MODULE"] = "desktop"
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-from PyQt5.QtCore import QRectF, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QObject, QRectF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRegion, QSurfaceFormat
 from PyQt5.QtWidgets import (
     QApplication,
@@ -194,7 +196,7 @@ def show_startup_message(parent, title, text, icon=QMessageBox.Information):
 class StartupLoadingDialog(QDialog):
     def __init__(self, parent=None, wait_for_voice=False):
         super().__init__(parent)
-        self._title = "正在唤醒希洛里..."
+        self._title = "唤醒苏念"
         self._subtitle = "正在依次准备角色界面、动作模型和语音能力。"
         self._hint = "启动完成后会自动进入桌宠界面。"
         self._tick = 0
@@ -210,7 +212,7 @@ class StartupLoadingDialog(QDialog):
         self._closed = False
         self._manual_position = False
 
-        self.setWindowTitle("启动中")
+        self.setWindowTitle("唤醒苏念")
         self.setModal(False)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, False)
@@ -327,7 +329,7 @@ class StartupLoadingDialog(QDialog):
         painter.setPen(QPen(QColor(229, 133, 180, 205), 1.4))
         painter.drawPath(panel_path)
 
-        content_top = panel_rect.top() + max(36.0, (panel_rect.height() - 338.0) / 2.0)
+        content_top = panel_rect.top() + max(26.0, (panel_rect.height() - 384.0) / 2.0)
 
         badge_rect = QRectF(panel_rect.left() + 28, content_top, 104, 32)
         badge_path = QPainterPath()
@@ -335,7 +337,7 @@ class StartupLoadingDialog(QDialog):
         painter.fillPath(badge_path, QColor(255, 255, 255, 198))
         painter.setPen(QColor(170, 88, 130))
         painter.setFont(QFont("Microsoft YaHei UI", 9, QFont.DemiBold))
-        painter.drawText(badge_rect, Qt.AlignCenter, "STARTUP")
+        painter.drawText(badge_rect, Qt.AlignCenter, "唤醒")
 
         spinner_center_x = panel_rect.left() + 100
         spinner_center_y = content_top + 112
@@ -374,7 +376,7 @@ class StartupLoadingDialog(QDialog):
             self._subtitle,
         )
 
-        status_rect = QRectF(panel_rect.left() + 28, content_top + 204, panel_rect.width() - 56, 46)
+        status_rect = QRectF(panel_rect.left() + 28, content_top + 196, panel_rect.width() - 56, 46)
         status_path = QPainterPath()
         status_path.addRoundedRect(status_rect, 18, 18)
         painter.fillPath(status_path, QColor(255, 255, 255, 198))
@@ -389,8 +391,8 @@ class StartupLoadingDialog(QDialog):
         painter.setPen(QColor(176, 101, 134))
         painter.setFont(QFont("Microsoft YaHei UI", 9))
         painter.drawText(
-            QRectF(panel_rect.left() + 28, content_top + 264, panel_rect.width() - 56, 42),
-            Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap,
+            QRectF(panel_rect.left() + 28, content_top + 252, panel_rect.width() - 56, 84),
+            Qt.AlignLeft | Qt.AlignVCenter | Qt.TextWordWrap,
             self._hint,
         )
 
@@ -400,7 +402,7 @@ class StartupLoadingDialog(QDialog):
             ("语音能力", *self._step_state(self._voice_done, self._voice_success)),
         ]
         chip_x = panel_rect.left() + 28
-        chip_y = content_top + 322
+        chip_y = content_top + 342
         chip_w = 132
         chip_h = 48
         for index, (label, state, fg, bg) in enumerate(steps):
@@ -415,6 +417,148 @@ class StartupLoadingDialog(QDialog):
             painter.drawText(rect.adjusted(10, 22, -10, -6), Qt.AlignHCenter | Qt.AlignBottom, state)
 
         painter.end()
+
+class StartupSplashController(QObject):
+    """Keep startup animation responsive while the main Qt thread loads Live2D."""
+
+    finished = pyqtSignal(int)
+
+    def __init__(self, parent=None, wait_for_voice=False):
+        super().__init__(parent)
+        self._wait_for_voice = bool(wait_for_voice)
+        self._minimum_visible_seconds = 3.2 if wait_for_voice else 2.0
+        self._shown_at = 0.0
+        self._window_done = False
+        self._model_done = False
+        self._voice_done = not self._wait_for_voice
+        self._geometry = None
+        self._dialog = None
+        self._process = None
+        self._sentinel_path = ""
+        self._closed = False
+        self._finish_timer = QTimer(self)
+        self._finish_timer.setSingleShot(True)
+        self._finish_timer.timeout.connect(self._maybe_finish)
+
+    def setGeometry(self, *args):
+        self._geometry = args
+        if self._dialog is not None:
+            self._dialog.setGeometry(*args)
+
+    def show(self):
+        self._shown_at = time.monotonic()
+        if self._start_external_splash():
+            return
+        self._dialog = StartupLoadingDialog(wait_for_voice=self._wait_for_voice)
+        self._dialog.finished.connect(self.finished.emit)
+        if self._geometry is not None:
+            self._dialog.setGeometry(*self._geometry)
+        self._dialog.show()
+
+    def raise_(self):
+        if self._dialog is not None:
+            self._dialog.raise_()
+
+    def activateWindow(self):
+        if self._dialog is not None:
+            self._dialog.activateWindow()
+
+    def mark_window_ready(self, success=True):
+        self._window_done = True
+        if self._dialog is not None:
+            self._dialog.mark_window_ready(success)
+        else:
+            self._maybe_finish()
+
+    def mark_model_ready(self, success=True):
+        self._model_done = True
+        if self._dialog is not None:
+            self._dialog.mark_model_ready(success)
+        else:
+            self._maybe_finish()
+
+    def mark_voice_ready(self, success=True):
+        self._voice_done = True
+        if self._dialog is not None:
+            self._dialog.mark_voice_ready(success)
+        else:
+            self._maybe_finish()
+
+    def _all_loading_done(self):
+        return self._window_done and self._model_done and self._voice_done
+
+    def _start_external_splash(self):
+        if getattr(sys, "frozen", False):
+            return False
+        splash_script = os.path.join(BASE_DIR, "persona_startup_splash.py")
+        if not os.path.exists(splash_script) or not self._geometry:
+            return False
+        x, y, width, height = [str(int(value)) for value in self._geometry]
+        self._sentinel_path = os.path.join(
+            tempfile.gettempdir(),
+            f"persona_startup_splash_{os.getpid()}_{int(time.time() * 1000)}.close",
+        )
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        try:
+            self._process = subprocess.Popen(
+                [
+                    sys.executable,
+                    splash_script,
+                    "--x",
+                    x,
+                    "--y",
+                    y,
+                    "--width",
+                    width,
+                    "--height",
+                    height,
+                    "--sentinel",
+                    self._sentinel_path,
+                    "--parent-pid",
+                    str(os.getpid()),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+            return True
+        except Exception as exc:
+            print("STARTUP_SPLASH_EXTERNAL_ERROR =", exc)
+            self._process = None
+            self._sentinel_path = ""
+            return False
+
+    def _maybe_finish(self):
+        if self._closed or not self._all_loading_done():
+            return
+        remaining = self._minimum_visible_seconds - (time.monotonic() - self._shown_at)
+        if remaining > 0:
+            self._finish_timer.start(max(1, int(remaining * 1000)))
+            return
+        self._closed = True
+        self._finish_timer.stop()
+        if self._dialog is not None:
+            self._dialog.accept()
+            return
+        if self._sentinel_path:
+            try:
+                with open(self._sentinel_path, "w", encoding="utf-8") as handle:
+                    handle.write("close\n")
+            except Exception as exc:
+                print("STARTUP_SPLASH_CLOSE_SIGNAL_ERROR =", exc)
+        self.finished.emit(QDialog.Accepted)
+        if self._process is not None:
+            QTimer.singleShot(1200, self._terminate_external_if_needed)
+
+    def _terminate_external_if_needed(self):
+        if self._process is None or self._process.poll() is not None:
+            return
+        try:
+            self._process.terminate()
+        except Exception:
+            pass
+
 
 # Runtime profile controls.
 # Default stays "test" for direct developer runs so existing test memory/profile data remain visible.
@@ -2094,7 +2238,7 @@ def main():
         target_x, target_y = 200, 120
 
     wait_for_local_audio = startup_state["wait_for_local_tts"] or startup_state["wait_for_local_asr"]
-    splash = StartupLoadingDialog(wait_for_voice=wait_for_local_audio)
+    splash = StartupSplashController(wait_for_voice=wait_for_local_audio)
     splash._manual_position = True
     splash.setGeometry(target_x, target_y, WINDOW_WIDTH, WINDOW_HEIGHT)
     splash.show()
