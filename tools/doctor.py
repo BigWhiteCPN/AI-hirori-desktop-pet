@@ -56,6 +56,16 @@ LOCAL_ASR_MODULES = (
     ("funasr", "FunASR runtime"),
 )
 
+OPTIONAL_HINTS = {
+    "playwright": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_browser_agent.txt, then run: .\\.venv\\Scripts\\python.exe -m playwright install chromium",
+    "PIL": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_ocr.txt",
+    "pytesseract": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_ocr.txt",
+    "keyring": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_desktop_optional.txt",
+    "sentence_transformers": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_memory.txt",
+    "faster_qwen3_tts": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_local_tts.txt",
+    "funasr": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_local_asr.txt",
+}
+
 
 def module_available(name: str) -> bool:
     try:
@@ -103,6 +113,7 @@ def check_modules(items, failures: list[str] | None = None, warnings: list[str] 
             print_result("OK", f"{module_name} available ({description})")
         else:
             message = f"{module_name} missing ({description})"
+            hint = OPTIONAL_HINTS.get(module_name, "")
             if required:
                 if failures is not None:
                     failures.append(message)
@@ -111,6 +122,8 @@ def check_modules(items, failures: list[str] | None = None, warnings: list[str] 
                 if warnings is not None:
                     warnings.append(message)
                 print_result("WARN", message)
+                if hint:
+                    print_result("INFO", hint)
 
 
 def describe_path_setting(config: dict, key: str) -> None:

@@ -1,7 +1,4 @@
-PyQt5
-live2d-py
-numpy
-sounddevice
-faster-whisper
-faster-qwen3-tts
-sentence-transformers
+-r requirements_core.txt
+-r requirements_local_tts.txt
+-r requirements_local_asr.txt
+-r requirements_memory.txt

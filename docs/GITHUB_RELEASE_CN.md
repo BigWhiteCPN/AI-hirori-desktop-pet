@@ -7,7 +7,7 @@
 - 源码：`persona_bot_test.py`、`persona_pet/`、`tools/`、`tests/`
 - 文档：`README.md`、`README_RUNTIME.md`、`RELEASE_USAGE.txt`、`docs/`
 - 轻量资源：`assets/`、`hiyori_pro_zh/`
-- 依赖清单：`requirements_runtime.txt`、`requirements_browser_agent.txt`
+- 依赖清单：`requirements_core.txt`、`requirements_runtime.txt`、各类 `requirements_*.txt`
 - 配置模板：`persona_llm_config.release.json`、`.env.example`
 - 启动脚本：`setup_persona_bot_test.bat`、`run_persona_bot_test.bat`
 
@@ -34,12 +34,24 @@ cd AI-hirori-desktop-pet
 .\run_persona_bot_test.bat
 ```
 
+## 发布时要说清楚的事
+
+- 当前更适合 Windows 用户
+- `requirements_core.txt` 是最小运行依赖
+- 本地 TTS / 本地 ASR / OCR / browser agent 都是扩展能力
+- browser agent 除了安装 Python 包，还要执行 `playwright install chromium`
+- OCR 除了 Python 包，还需要系统级 Tesseract
+
 ## 默认 profile
 
 GitHub / 新用户场景默认使用 `main` profile：
 
 - 启动读取 `persona_llm_config.json`
 - 如需调试独立配置，再手动使用 `--profile test`
+
+## 许可证提醒
+
+仓库目前没有直接落顶层 `LICENSE`，因为其中包含 `hiyori_pro_zh` 这类带单独授权条款的第三方素材。正式声明仓库许可证前，先确认这些素材是否保留在主仓库以及再分发边界。
 
 ## 自检建议
 

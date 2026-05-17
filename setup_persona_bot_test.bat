@@ -30,7 +30,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 set "VENV_PY=%ROOT%.venv\Scripts\python.exe"
 
-echo [3/4] Installing runtime dependencies...
+echo [3/4] Installing core dependencies...
 "%VENV_PY%" -m pip install -U pip
 if errorlevel 1 (
   echo Failed to upgrade pip.
@@ -38,9 +38,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
-"%VENV_PY%" -m pip install -r "%ROOT%requirements_runtime.txt"
+"%VENV_PY%" -m pip install -r "%ROOT%requirements_core.txt"
 if errorlevel 1 (
-  echo Failed to install requirements_runtime.txt
+  echo Failed to install requirements_core.txt
   pause
   exit /b 1
 )
@@ -61,8 +61,23 @@ echo Setup finished.
 echo Main launch command:
 echo   .\.venv\Scripts\python.exe .\persona_bot_test.py --profile main
 echo.
+echo Recommended cloud voice add-on:
+echo   set DEEPSEEK_API_KEY=...
+echo   set VOLCENGINE_TTS_API_KEY=...
+echo.
+echo Optional local TTS add-on:
+echo   .\.venv\Scripts\python.exe -m pip install -r .\requirements_local_tts.txt
+echo.
+echo Optional local ASR add-on:
+echo   .\.venv\Scripts\python.exe -m pip install -r .\requirements_local_asr.txt
+echo.
+echo Optional OCR add-on:
+echo   .\.venv\Scripts\python.exe -m pip install -r .\requirements_ocr.txt
+echo   Then install Tesseract on Windows.
+echo.
 echo Optional browser agent:
 echo   .\.venv\Scripts\python.exe -m pip install -r .\requirements_browser_agent.txt
+echo   .\.venv\Scripts\python.exe -m playwright install chromium
 echo.
 if not "%DOCTOR_EXIT%"=="0" (
   echo Doctor reported blocking issues or warnings above. Fix them before launch.

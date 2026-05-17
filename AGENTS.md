@@ -5,7 +5,8 @@ This repository is the local `person_test_all` AI desktop pet project. It is a s
 ## Run
 
 ```powershell
-.\.venv\Scripts\python.exe .\persona_bot_test.py --profile main
+.\setup_persona_bot_test.bat
+.\run_persona_bot_test.bat
 ```
 
 Use `setup_persona_bot_test.bat` for first-run setup and `run_persona_bot_test.bat` as the checked launcher.
@@ -16,6 +17,7 @@ Use `setup_persona_bot_test.bat` for first-run setup and `run_persona_bot_test.b
 - `persona_pet/` contains the runtime modules and mixins.
 - `Live2DDesktopPet` combines PyQt5 `QOpenGLWidget`, Live2D rendering, LLM chat, memory, speech/TTS, Godot bridge, room/city modes, inventory/economy, and agent capabilities.
 - `persona_llm_config*.json` is local configuration; do not commit secrets. Only `persona_llm_config.release.json` is intended for the repo.
+- `requirements_core.txt` is the minimal install; local TTS/ASR/OCR/browser features have separate requirement files.
 - `outputs/`, `logs/`, `user_data_backups/`, and `third_party/` are runtime/local data.
 
 ## Important Modules
