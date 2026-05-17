@@ -196,10 +196,10 @@ def eval_state_homeostasis_long_run():
         physiology.tick(now=now, busy=busy)
         cycle.tick(now=now)
         if minute % 180 == 0:
-            drive.on_user_message("ä»Šå¤©çŠ¶æ€æ€Žä¹ˆæ ·ï¼Ÿ", emotion="neutral")
-            physiology.on_user_message("ä»Šå¤©çŠ¶æ€æ€Žä¹ˆæ ·ï¼Ÿ")
+            drive.on_user_message("今天状态怎么样？", emotion="neutral")
+            physiology.on_user_message("今天状态怎么样？")
         if minute % 240 == 0:
-            drive.on_assistant_reply("æˆ‘çŠ¶æ€è¿˜ç®—å¹³ç¨³ã€‚", emotion="neutral")
+            drive.on_assistant_reply("我状态还算平稳。", emotion="neutral")
             physiology.on_assistant_reply()
 
     for value in physiology.values.values():

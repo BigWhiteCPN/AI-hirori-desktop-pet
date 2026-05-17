@@ -980,7 +980,7 @@ class DriveStatusDialog(QDialog):
                 try:
                     profile = user_profile.snapshot()
                     profile_line = (
-                        f"用户侧写：{profile.get('mbti', '????')} "
+                        f"用户侧写：{profile.get('mbti', '未知')} "
                         f"({profile.get('confidence', 0):.0f}%)；"
                         f"{'；'.join(profile.get('adaptation_rules', [])[:2])}"
                     )

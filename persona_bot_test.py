@@ -12,13 +12,14 @@ os.environ["QT_OPENGL"] = "desktop"
 os.environ["QT_GL_MODULE"] = "desktop"
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor, QFont, QSurfaceFormat
+from PyQt5.QtCore import QRectF, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRegion, QSurfaceFormat
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
     QInputDialog,
     QLineEdit,
+    QMessageBox,
     QMenu,
     QOpenGLWidget,
     QToolButton,
@@ -142,8 +143,8 @@ MODEL_JSON_PATH = os.path.join(
     "runtime",
     "hiyori_pro_t11.model3.json",
 )
-WINDOW_WIDTH = 420
-WINDOW_HEIGHT = 700
+WINDOW_WIDTH = 500
+WINDOW_HEIGHT = 780
 ROOM_WINDOW_WIDTH = 760
 ROOM_WINDOW_HEIGHT = 570
 ROOM_MODEL_SCALE = 0.72
@@ -154,11 +155,273 @@ FRAME_INTERVAL_MS = 16
 DIALOGUE_ROLE_LISTENER = "listener"
 DIALOGUE_ROLE_SPEAKER = "speaker"
 
+
+def show_startup_message(parent, title, text, icon=QMessageBox.Information):
+    box = QMessageBox(parent)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setIcon(icon)
+    box.setStandardButtons(QMessageBox.Ok)
+    box.setStyleSheet(
+        """
+        QMessageBox {
+            background: #fff6fb;
+            color: #543247;
+            font: 10pt "Microsoft YaHei UI";
+        }
+        QMessageBox QLabel {
+            color: #543247;
+            min-width: 320px;
+        }
+        QMessageBox QPushButton {
+            min-width: 88px;
+            min-height: 30px;
+            border-radius: 8px;
+            border: 1px solid rgba(210, 98, 152, 220);
+            padding: 4px 14px;
+            background: #ffffff;
+            color: #8f2d5a;
+            font-weight: 600;
+        }
+        QMessageBox QPushButton:hover {
+            background: #ffe8f3;
+        }
+        """
+    )
+    box.exec_()
+
+
+class StartupLoadingDialog(QDialog):
+    def __init__(self, parent=None, wait_for_voice=False):
+        super().__init__(parent)
+        self._title = "正在唤醒希洛里..."
+        self._subtitle = "正在依次准备角色界面、动作模型和语音能力。"
+        self._hint = "启动完成后会自动进入桌宠界面。"
+        self._tick = 0
+        self._minimum_visible_seconds = 3.2 if wait_for_voice else 2.0
+        self._shown_at = 0.0
+        self._window_done = False
+        self._window_success = False
+        self._model_done = False
+        self._model_success = False
+        self._voice_required = bool(wait_for_voice)
+        self._voice_done = not self._voice_required
+        self._voice_success = not self._voice_required
+        self._closed = False
+        self._manual_position = False
+
+        self.setWindowTitle("启动中")
+        self.setModal(False)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, False)
+        self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._advance_animation)
+        self._timer.start(32)
+
+    def _update_rounded_mask(self):
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), 34, 34)
+        region = QRegion(path.toFillPolygon().toPolygon())
+        self.setMask(region)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._shown_at = time.monotonic()
+        self._update_rounded_mask()
+        if not self._manual_position:
+            parent = self.parentWidget()
+            if parent is not None:
+                parent_rect = parent.frameGeometry()
+                self.resize(parent.width(), parent.height())
+                self.move(
+                    parent_rect.center().x() - self.width() // 2,
+                    parent_rect.center().y() - self.height() // 2,
+                )
+                return
+            screen = QApplication.primaryScreen()
+            if screen is None:
+                return
+            rect = screen.availableGeometry()
+            self.move(rect.center().x() - self.width() // 2, rect.center().y() - self.height() // 2)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_rounded_mask()
+
+    def _advance_animation(self):
+        self._tick = (self._tick + 1) % 360
+        self.update()
+        self._maybe_finish()
+
+    def mark_window_ready(self, success=True):
+        self._window_done = True
+        self._window_success = bool(success)
+        self.update()
+        self._maybe_finish()
+
+    def mark_model_ready(self, success=True):
+        self._model_done = True
+        self._model_success = bool(success)
+        self.update()
+        self._maybe_finish()
+
+    def mark_voice_ready(self, success=True):
+        self._voice_done = True
+        self._voice_success = bool(success)
+        self.update()
+        self._maybe_finish()
+
+    def _all_loading_done(self):
+        return self._window_done and self._model_done and self._voice_done
+
+    def _status_text(self):
+        if not self._window_done:
+            return "正在准备角色界面..."
+        if not self._model_done:
+            return "正在加载 Live2D 动作模型..."
+        if self._voice_required and not self._voice_done:
+            return "正在预热语音能力..."
+        if self._voice_required and not self._voice_success:
+            return "语音预热未完成，正在进入桌宠界面..."
+        if not self._model_success:
+            return "模型加载失败，正在进入错误处理..."
+        return "准备完成，马上进入桌宠界面..."
+
+    def _step_state(self, done, success=True):
+        if done and success:
+            return ("已完成", QColor(76, 166, 120), QColor(236, 255, 244, 230))
+        if done and not success:
+            return ("已跳过", QColor(207, 123, 76), QColor(255, 245, 238, 230))
+        return ("进行中", QColor(214, 101, 154), QColor(255, 238, 246, 230))
+
+    def _maybe_finish(self):
+        if self._closed or not self._all_loading_done():
+            return
+        if (time.monotonic() - self._shown_at) < self._minimum_visible_seconds:
+            return
+        self._closed = True
+        self._timer.stop()
+        self.accept()
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.fillRect(self.rect(), QColor(255, 244, 250, 255))
+
+        panel_rect = QRectF(14, 14, self.width() - 28, self.height() - 28)
+        shadow_rect = QRectF(panel_rect)
+        shadow_rect.translate(0, 8)
+        shadow_path = QPainterPath()
+        shadow_path.addRoundedRect(shadow_rect, 36, 36)
+        painter.fillPath(shadow_path, QColor(88, 47, 74, 52))
+
+        gradient = QLinearGradient(panel_rect.left(), panel_rect.top(), panel_rect.right(), panel_rect.bottom())
+        gradient.setColorAt(0.0, QColor(255, 247, 252, 248))
+        gradient.setColorAt(0.38, QColor(255, 239, 247, 244))
+        gradient.setColorAt(1.0, QColor(255, 226, 239, 242))
+        panel_path = QPainterPath()
+        panel_path.addRoundedRect(panel_rect, 36, 36)
+        painter.fillPath(panel_path, gradient)
+        painter.setPen(QPen(QColor(229, 133, 180, 205), 1.4))
+        painter.drawPath(panel_path)
+
+        content_top = panel_rect.top() + max(36.0, (panel_rect.height() - 338.0) / 2.0)
+
+        badge_rect = QRectF(panel_rect.left() + 28, content_top, 104, 32)
+        badge_path = QPainterPath()
+        badge_path.addRoundedRect(badge_rect, 16, 16)
+        painter.fillPath(badge_path, QColor(255, 255, 255, 198))
+        painter.setPen(QColor(170, 88, 130))
+        painter.setFont(QFont("Microsoft YaHei UI", 9, QFont.DemiBold))
+        painter.drawText(badge_rect, Qt.AlignCenter, "STARTUP")
+
+        spinner_center_x = panel_rect.left() + 100
+        spinner_center_y = content_top + 112
+        spinner_rect = QRectF(spinner_center_x - 42, spinner_center_y - 42, 84, 84)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(248, 208, 226, 188), 10))
+        painter.drawEllipse(spinner_rect)
+
+        painter.setPen(QPen(QColor(225, 104, 160), 10, Qt.SolidLine, Qt.RoundCap))
+        painter.drawArc(spinner_rect, int((-self._tick - 20) * 16), 112 * 16)
+
+        orbit_radius = 56
+        for index in range(3):
+            angle = math.radians(self._tick * 1.6 + index * 120.0)
+            dot_x = spinner_center_x + math.cos(angle) * orbit_radius
+            dot_y = spinner_center_y + math.sin(angle) * orbit_radius * 0.62
+            radius = 7 if index == 0 else 5
+            alpha = 240 if index == 0 else 168
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(237, 112, 167, alpha))
+            painter.drawEllipse(QRectF(dot_x - radius, dot_y - radius, radius * 2, radius * 2))
+
+        painter.setPen(QColor(96, 52, 77))
+        painter.setFont(QFont("Microsoft YaHei UI", 17, QFont.Bold))
+        painter.drawText(
+            QRectF(panel_rect.left() + 172, content_top + 40, panel_rect.width() - 206, 34),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            self._title,
+        )
+
+        painter.setPen(QColor(143, 73, 110))
+        painter.setFont(QFont("Microsoft YaHei UI", 10))
+        painter.drawText(
+            QRectF(panel_rect.left() + 172, content_top + 80, panel_rect.width() - 206, 64),
+            Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap,
+            self._subtitle,
+        )
+
+        status_rect = QRectF(panel_rect.left() + 28, content_top + 204, panel_rect.width() - 56, 46)
+        status_path = QPainterPath()
+        status_path.addRoundedRect(status_rect, 18, 18)
+        painter.fillPath(status_path, QColor(255, 255, 255, 198))
+        painter.setPen(QColor(163, 82, 122))
+        painter.setFont(QFont("Microsoft YaHei UI", 9, QFont.DemiBold))
+        painter.drawText(
+            status_rect.adjusted(18, 0, -18, 0),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            self._status_text(),
+        )
+
+        painter.setPen(QColor(176, 101, 134))
+        painter.setFont(QFont("Microsoft YaHei UI", 9))
+        painter.drawText(
+            QRectF(panel_rect.left() + 28, content_top + 264, panel_rect.width() - 56, 42),
+            Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap,
+            self._hint,
+        )
+
+        steps = [
+            ("角色界面", *self._step_state(self._window_done, self._window_success)),
+            ("动作模型", *self._step_state(self._model_done, self._model_success)),
+            ("语音能力", *self._step_state(self._voice_done, self._voice_success)),
+        ]
+        chip_x = panel_rect.left() + 28
+        chip_y = content_top + 322
+        chip_w = 132
+        chip_h = 48
+        for index, (label, state, fg, bg) in enumerate(steps):
+            rect = QRectF(chip_x + index * (chip_w + 12), chip_y, chip_w, chip_h)
+            chip_path = QPainterPath()
+            chip_path.addRoundedRect(rect, 14, 14)
+            painter.fillPath(chip_path, bg)
+            painter.setPen(fg)
+            painter.setFont(QFont("Microsoft YaHei UI", 8, QFont.DemiBold))
+            painter.drawText(rect.adjusted(10, 6, -10, -18), Qt.AlignHCenter | Qt.AlignTop, label)
+            painter.setFont(QFont("Microsoft YaHei UI", 8))
+            painter.drawText(rect.adjusted(10, 22, -10, -6), Qt.AlignHCenter | Qt.AlignBottom, state)
+
+        painter.end()
+
 # Runtime profile controls.
-# Default is "main" so GitHub users edit the same config file that the app reads on first run.
+# Default stays "test" for direct developer runs so existing test memory/profile data remain visible.
+# Launchers and README commands still use --profile main for GitHub/new-user flows.
 # Use --profile main, --profile test, or PERSONA_RUN_PROFILE=main/test to choose explicitly.
 # Use --reset-profile once to wipe a non-main profile at startup.
-PROFILE_SELECTION = apply_runtime_profile(default_profile="main", default_reset=False, argv=sys.argv)
+PROFILE_SELECTION = apply_runtime_profile(default_profile="test", default_reset=False, argv=sys.argv)
 RUN_PROFILE = PROFILE_SELECTION["profile"]
 RESET_PROFILE_ON_START = PROFILE_SELECTION["reset"]
 
@@ -211,7 +474,7 @@ SINGING_PROVIDER = "voicevox_chant"
 SINGING_EXTERNAL_COMMAND = ""
 SINGING_MAX_TEXT_CHARS = 72
 VOLCENGINE_TTS_URL = "https://openspeech.bytedance.com/api/v1/tts"
-VOLCENGINE_TTS_VOICE_TYPE = "S_zEdGPhR02"
+VOLCENGINE_TTS_VOICE_TYPE = ""
 VOLCENGINE_TTS_CLUSTER = "volcano_icl"
 VOLCENGINE_TTS_FORMAT = "wav"
 VOLCENGINE_TTS_RATE = 24000
@@ -319,9 +582,12 @@ class Live2DDesktopPet(
     HeartMixin,
     QOpenGLWidget,
 ):
+    startup_loading_done = pyqtSignal(bool)
+
     def __init__(self, llm_config=None):
         super().__init__()
         self.llm_config = dict(llm_config or load_llm_config())
+        self._startup_loading_signal_sent = False
         self.model = None
         self.motion_groups = load_motion_groups(MODEL_JSON_PATH)
         self.mixer = EmotionMixer()
@@ -602,6 +868,7 @@ class Live2DDesktopPet(
             "}"
         )
         self.help_button.setMenu(self.build_shortcut_menu())
+        self.help_button.setToolTip("按键说明")
 
         self.close_button = QToolButton(self)
         self.close_button.setText("×")
@@ -624,6 +891,8 @@ class Live2DDesktopPet(
             "background: rgba(255, 205, 225, 248);"
             "}"
         )
+        self.close_button.setText("×")
+        self.close_button.setToolTip("关闭")
         self.close_button.clicked.connect(self.close)
         self.setup_physiology_module()
         self.chat.client._physiology = self.physiology
@@ -636,6 +905,12 @@ class Live2DDesktopPet(
         self.timer.start(FRAME_INTERVAL_MS)
         if bool(self.llm_config.get("onboarding_first_greeting_pending")):
             QTimer.singleShot(1800, self.play_first_contact_greeting)
+
+    def notify_startup_loading_done(self, success):
+        if self._startup_loading_signal_sent:
+            return
+        self._startup_loading_signal_sent = True
+        self.startup_loading_done.emit(bool(success))
 
     def _setup_interaction_activity_monitor(self):
         if not config_bool(self.llm_config, "interaction_activity_monitor_enabled", False):
@@ -1299,6 +1574,8 @@ class Live2DDesktopPet(
         try:
             save_llm_config(new_config)
         except Exception as exc:
+            self.show_chat_status("API 璁剧疆淇濆瓨澶辫触", seconds=3.0)
+            self.show_chat_status("API 设置保存失败", seconds=3.0)
             self.show_chat_status("API 设置保存失败", seconds=3.0)
             print("API_SETTINGS_SAVE_ERROR =", exc)
             return
@@ -1377,7 +1654,15 @@ class Live2DDesktopPet(
         self.memory_dialog.show()
         self.memory_dialog.raise_()
         self.memory_dialog.activateWindow()
+        graph, _short_terms, _long_term = self.memory.graph_snapshot()
+        if not graph.get("nodes"):
+            if RUN_PROFILE == "main" and os.path.exists(os.path.join(BASE_DIR, "outputs", "profiles", "test", "memory", "persona_memory.db")):
+                self.show_chat_status("当前 main 档案还没有记忆数据；test 档案里已有旧记忆。", seconds=4.2)
+            else:
+                self.show_chat_status("当前档案还没有记忆数据，对话几轮后这里会长出关系网。", seconds=4.0)
+            return
         self.show_chat_status("已打开脑内记忆地图。", seconds=2.0)
+        return
 
     def open_drive_status_dialog(self):
         self.drive_dialog = DriveStatusDialog(
@@ -1558,16 +1843,16 @@ class Live2DDesktopPet(
             return
 
         if event.key() == Qt.Key_P and event.modifiers() & Qt.ShiftModifier:
-            self.show_chat_status("开始说话者逐句测试。", seconds=2.0)
+            self.show_chat_status("开始说话测试。", seconds=2.0)
             self.start_dialogue_test(DIALOGUE_ROLE_SPEAKER)
             return
 
         if event.key() == Qt.Key_R and self.model is not None:
             try:
                 self.model.StartMotion("Idle", random.randrange(max(1, self.motion_groups.get("Idle", 1))), 1)
-                self.show_chat_status("已触发随机待机动作。", seconds=1.8)
+                self.show_chat_status("已随机切换一个待机动作。", seconds=1.8)
             except Exception:
-                self.show_chat_status("随机动作触发失败。", seconds=2.0)
+                self.show_chat_status("随机动作播放失败。", seconds=2.0)
                 pass
             return
 
@@ -1685,12 +1970,13 @@ def prompt_for_api_key_if_needed(parent=None):
             except Exception as exc:
                 print("FIRST_RUN_CONFIG_SAVE_ERROR =", exc)
         else:
-            config["onboarding_complete"] = True
-            config["startup_credential_prompts"] = False
-            try:
-                save_llm_config(config)
-            except Exception:
-                pass
+            show_startup_message(
+                parent,
+                "未完成初始化",
+                "你取消了首次引导。程序会先按当前配置继续启动，后续也可以在 API 设置面板里补全配置。",
+                icon=QMessageBox.Information,
+            )
+            return None
     allow_startup_prompts = bool(config.get("startup_credential_prompts", False))
     provider = str(config.get("provider", "")).lower()
     changed = False
@@ -1703,13 +1989,21 @@ def prompt_for_api_key_if_needed(parent=None):
         elif allow_startup_prompts:
             key, ok = QInputDialog.getText(
                 parent,
-                "DeepSeek API Key",
+                "未完成初始化",
                 "请输入你的 DeepSeek API key。\n会写入 persona_llm_config.json，下次启动不再重复输入。",
                 QLineEdit.Password,
             )
             if ok and key.strip():
                 config["api_key"] = key.strip()
                 changed = True
+        if not (config.get("api_key") or os.environ.get(api_key_env, "") or os.environ.get("OPENAI_API_KEY", "")):
+            show_startup_message(
+                parent,
+                "未完成初始化",
+                f"当前还没有可用的 API Key。\n请在环境变量中提供 {api_key_env}，否则聊天功能无法使用。",
+                icon=QMessageBox.Warning,
+            )
+            return None
 
     speech_provider = str(config.get("speech_provider") or "").lower()
     if speech_provider in ("doubao", "volcengine", "bytedance"):
@@ -1721,7 +2015,7 @@ def prompt_for_api_key_if_needed(parent=None):
         elif not legacy_existing and allow_startup_prompts:
             key, ok = QInputDialog.getText(
                 parent,
-                "Doubao ASR API Key",
+                "未完成初始化",
                 "请输入豆包/火山语音识别 API Key。\n会写入 persona_llm_config.json；取消则语音识别回退本地 Whisper。",
                 QLineEdit.Password,
             )
@@ -1753,7 +2047,7 @@ def prompt_for_api_key_if_needed(parent=None):
         elif allow_startup_prompts:
             token, ok = QInputDialog.getText(
                 parent,
-                "火山 TTS API Key",
+                "未完成初始化",
                 "请输入火山引擎语音合成 API Key。\n成功例子里使用的是 X-Api-Key 鉴权；缺少 Key 时角色不会出声。",
                 QLineEdit.Password,
             )
@@ -1781,46 +2075,230 @@ def main():
     app = QApplication(sys.argv)
     app.setFont(QFont("Microsoft YaHei UI", 10))
     llm_config = prompt_for_api_key_if_needed()
+    if llm_config is None:
+        return
+
+    startup_state = {
+        "wait_for_local_tts": str(llm_config.get("tts_provider") or "").lower() == "local",
+        "wait_for_local_asr": str(llm_config.get("speech_provider") or "").lower() == "local",
+        "local_tts_engine": None,
+        "pet": None,
+        "voice_ready_timer": None,
+    }
+    screen = app.primaryScreen()
+    if screen is not None:
+        screen_rect = screen.availableGeometry()
+        target_x = screen_rect.x() + max(0, (screen_rect.width() - WINDOW_WIDTH) // 2)
+        target_y = screen_rect.y() + max(0, (screen_rect.height() - WINDOW_HEIGHT) // 2)
+    else:
+        target_x, target_y = 200, 120
+
+    wait_for_local_audio = startup_state["wait_for_local_tts"] or startup_state["wait_for_local_asr"]
+    splash = StartupLoadingDialog(wait_for_voice=wait_for_local_audio)
+    splash._manual_position = True
+    splash.setGeometry(target_x, target_y, WINDOW_WIDTH, WINDOW_HEIGHT)
+    splash.show()
+    splash.raise_()
+    splash.activateWindow()
+    app.processEvents()
+
+    def print_runtime_help(pet):
+        print("Runtime controls ready.")
+        print("Keys: 1~8 switch expressions.")
+        print("SPACE pauses or resumes motion, ENTER triggers interaction.")
+        print("LLM_CONFIG_PATH =", LLM_CONFIG_PATH)
+        print("motion groups =", pet.motion_groups)
+
+    def finish_voice_loading_setup():
+        wait_for_local_audio_now = startup_state["wait_for_local_tts"] or startup_state["wait_for_local_asr"]
+        if not wait_for_local_audio_now:
+            splash.mark_voice_ready(True)
+            return
+
+        voice_ready_timer = QTimer(splash)
+        voice_ready_timer.setInterval(120)
+        startup_state["voice_ready_timer"] = voice_ready_timer
+
+        def poll_local_audio_ready():
+            tts_ready = True
+            tts_success = True
+            if startup_state["wait_for_local_tts"]:
+                local_tts_engine = startup_state["local_tts_engine"]
+                if local_tts_engine is not None and local_tts_engine.is_ready():
+                    tts_success = True
+                elif local_tts_engine is not None and local_tts_engine.is_loading():
+                    tts_ready = False
+                else:
+                    tts_success = False
+
+            asr_ready = True
+            asr_success = True
+            if startup_state["wait_for_local_asr"]:
+                pet = startup_state["pet"]
+                if pet is not None and pet.speech_input.is_persistent_ready():
+                    asr_success = True
+                elif pet is not None and pet.speech_input.is_persistent_loading():
+                    asr_ready = False
+                else:
+                    asr_success = False
+
+            if not (tts_ready and asr_ready):
+                return
+
+            voice_ready_timer.stop()
+            splash.mark_voice_ready(tts_success and asr_success)
+
+        voice_ready_timer.timeout.connect(poll_local_audio_ready)
+        voice_ready_timer.start()
+        poll_local_audio_ready()
+
+    def start_asr_preload():
+        if startup_state["wait_for_local_asr"]:
+            try:
+                startup_state["pet"].speech_input.preload_persistent_async()
+                print("本地语音识别模型正在后台预热...")
+            except Exception as exc:
+                print("LOCAL_ASR_PRELOAD_ERROR =", exc)
+                startup_state["wait_for_local_asr"] = False
+        finish_voice_loading_setup()
+
+    def create_pet_window():
+        pet = Live2DDesktopPet(llm_config=llm_config)
+        startup_state["pet"] = pet
+        pet.move(target_x, target_y)
+        pet.startup_loading_done.connect(splash.mark_model_ready)
+        pet.show()
+        splash.mark_window_ready(True)
+        splash.raise_()
+        splash.activateWindow()
+        splash.finished.connect(lambda _result: (pet.raise_(), pet.setFocus(), pet.activateWindow()))
+        print_runtime_help(pet)
+        QTimer.singleShot(0, start_asr_preload)
+
+    def start_tts_preload():
+        if startup_state["wait_for_local_tts"]:
+            try:
+                from persona_pet.qwen_tts_engine import QwenTTSEngine
+
+                startup_state["local_tts_engine"] = QwenTTSEngine(
+                    model_path=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_model_path")),
+                    ref_dir=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_ref_dir")),
+                    ref_audio=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_ref_audio")),
+                    ref_text=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_ref_text")),
+                    xvec_only=config_bool(llm_config, "qwen_tts_xvec_only", False),
+                    do_sample=config_bool(llm_config, "qwen_tts_do_sample", False),
+                    seed=int(llm_config.get("qwen_tts_seed", 24681357) or 24681357),
+                    temperature=float(llm_config.get("qwen_tts_temperature", 0.55) or 0.55),
+                    top_p=float(llm_config.get("qwen_tts_top_p", 0.85) or 0.85),
+                )
+                startup_state["local_tts_engine"].load_model_async()
+                print("本地 TTS 模型正在后台加载...")
+            except ImportError as exc:
+                print(f"本地 TTS 依赖缺失：{exc}")
+                print("请运行：pip install faster-qwen3-tts")
+                print("PyTorch CUDA 版本请参考：https://pytorch.org/get-started/locally/")
+                llm_config["tts_provider"] = "volcengine"
+                startup_state["wait_for_local_tts"] = False
+        QTimer.singleShot(0, create_pet_window)
+
+    QTimer.singleShot(60, start_tts_preload)
+    return sys.exit(app.exec_())
 
     # Pre-load local TTS model if configured
     if str(llm_config.get("tts_provider") or "").lower() == "local":
         try:
             from persona_pet.qwen_tts_engine import QwenTTSEngine
-            engine = QwenTTSEngine(
+            local_tts_engine = QwenTTSEngine(
                 model_path=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_model_path")),
                 ref_dir=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_ref_dir")),
                 ref_audio=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_ref_audio")),
                 ref_text=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_ref_text")),
                 xvec_only=config_bool(llm_config, "qwen_tts_xvec_only", False),
-                do_sample=config_bool(llm_config, "qwen_tts_do_sample", True),
+                do_sample=config_bool(llm_config, "qwen_tts_do_sample", False),
                 seed=int(llm_config.get("qwen_tts_seed", 24681357) or 24681357),
-                temperature=float(llm_config.get("qwen_tts_temperature", 0.9) or 0.9),
-                top_p=float(llm_config.get("qwen_tts_top_p", 1.0) or 1.0),
+                temperature=float(llm_config.get("qwen_tts_temperature", 0.55) or 0.55),
+                top_p=float(llm_config.get("qwen_tts_top_p", 0.85) or 0.85),
             )
-            engine.load_model_async()
-            print("本地 TTS 模型正在后台加载中...")
+            local_tts_engine.load_model_async()
+            print("本地 TTS 模型正在后台加载...")
         except ImportError as exc:
-            print(f"本地 TTS 依赖缺失: {exc}")
-            print("请运行: pip install faster-qwen3-tts")
-            print("PyTorch CUDA 版本请参考: https://pytorch.org/get-started/locally/")
+            print(f"本地 TTS 依赖缺失：{exc}")
+            print("请运行：pip install faster-qwen3-tts")
+            print("PyTorch CUDA 版本请参考：https://pytorch.org/get-started/locally/")
             llm_config["tts_provider"] = "volcengine"
+            wait_for_local_tts = False
+            splash.mark_voice_ready(False)
 
     pet = Live2DDesktopPet(llm_config=llm_config)
+    pet.move(target_x, target_y)
+    pet.startup_loading_done.connect(splash.mark_model_ready)
     pet.show()
-    pet.move(200, 120)
-    pet.setFocus()
-    pet.activateWindow()
+    splash.mark_window_ready(True)
+    splash.show()
+    splash.raise_()
+    splash.activateWindow()
+    app.processEvents()
+    splash.finished.connect(lambda _result: (pet.raise_(), pet.setFocus(), pet.activateWindow()))
 
-    print("左键拖动整个桌宠窗口。")
+    if wait_for_local_asr:
+        try:
+            pet.speech_input.preload_persistent_async()
+            print("本地语音识别模型正在后台预热...")
+        except Exception as exc:
+            print("LOCAL_ASR_PRELOAD_ERROR =", exc)
+            wait_for_local_asr = False
+
+    if not wait_for_local_audio:
+        splash.mark_voice_ready(True)
+    else:
+        voice_ready_timer = QTimer(splash)
+        voice_ready_timer.setInterval(120)
+
+        def poll_local_audio_ready():
+            tts_ready = True
+            tts_success = True
+            if wait_for_local_tts:
+                if local_tts_engine is not None and local_tts_engine.is_ready():
+                    tts_ready = True
+                    tts_success = True
+                elif local_tts_engine is not None and local_tts_engine.is_loading():
+                    tts_ready = False
+                else:
+                    tts_ready = True
+                    tts_success = False
+
+            asr_ready = True
+            asr_success = True
+            if wait_for_local_asr:
+                if pet.speech_input.is_persistent_ready():
+                    asr_ready = True
+                    asr_success = True
+                elif pet.speech_input.is_persistent_loading():
+                    asr_ready = False
+                else:
+                    asr_ready = True
+                    asr_success = False
+
+            if not (tts_ready and asr_ready):
+                return
+
+            voice_ready_timer.stop()
+            splash.mark_voice_ready(tts_success and asr_success)
+
+        voice_ready_timer.timeout.connect(poll_local_audio_ready)
+        voice_ready_timer.start()
+        poll_local_audio_ready()
+
+    print("快捷键说明已加载。")
     print("按 1~8 切换测试文本。")
-    print("按 SPACE 只切换情绪，按 ENTER 模拟角色说这句话。")
-    print("按 L 把当前文本当作用户说话逐句监听，按 P 把当前文本当作角色自己逐句说话。")
-    print("按 V 开启自由语音对话，按 N 关闭自由语音对话；按 B 打开脑内记忆地图，按 M 打开角色状态面板，按 J 打开关系面板，按 G 截图聊天记录出主意；按 F2 也可以开启（输入框聚焦时可用）。")
-    print("作弊键：P 直接最高亲密，Shift+E 直接回满能量。")
-    print("右键角色打开 API 设置面板；输入框未聚焦时也可以按 F3 或 S。")
-    print("顶部输入框仍保留为备用：输入文字并回车发送给大模型。按 C 聚焦输入框。")
+    print("按 SPACE 只切换当前测试情绪；按 ENTER 播放当前测试文本。")
+    print("按 L 开始监听者逐句测试；按 Shift+P 开始说话测试。")
+    print("按 V 开启自由语音监听；按 N 关闭；按 B/M/J/G 可打开主要功能面板；F2 也可快速启动语音输入。")
+    print("按 P 触发亲密作弊码；按 Shift+E 恢复能量。")
+    print("键盘快捷支持打开 API 设置面板，可用 F3 或 S。")
+    print("顶部输入框支持直接打字，也支持语音输入；按 C 可聚焦输入框。")
     print(f"LLM 配置文件：{LLM_CONFIG_PATH}")
-    print("按 R 触发一次随机待机动作，按 ESC 退出。")
+    print("按 R 随机切换一个待机动作；按 ESC 退出。")
     print("可用 motion groups =", pet.motion_groups)
 
     sys.exit(app.exec_())
@@ -1833,3 +2311,4 @@ if __name__ == "__main__":
 
         raise SystemExit(speech_helper_main())
     main()
+

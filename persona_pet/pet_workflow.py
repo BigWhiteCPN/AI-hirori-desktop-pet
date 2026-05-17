@@ -1076,10 +1076,10 @@ class PetWorkflowMixin:
     def process_voice_events(self):
         for event in self.voice.consume_events():
             if event.error:
-                if "???? TTS" in event.error:
-                    self.show_chat_status("?????? TTS API Key", seconds=6.0)
+                if "火山 TTS API Key" in event.error:
+                    self.show_chat_status("请先填写 TTS API Key", seconds=6.0)
                 else:
-                    self.show_chat_status(f"TTS ???{event.error[:28]}", seconds=6.0)
+                    self.show_chat_status(f"TTS 出错：{event.error[:28]}", seconds=6.0)
                 print("VOLCENGINE_TTS_ERROR =", {"event_id": event.event_id, "error": event.error})
                 continue
 
