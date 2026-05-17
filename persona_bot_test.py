@@ -55,7 +55,12 @@ from persona_pet.chat_advice import ChatAdviceController
 from persona_pet.chat_capture import ChatAdviceCaptureMixin
 from persona_pet.heart import HeartMixin
 from persona_pet.library_dialogs import LifeLibraryDialog
-from persona_pet.llm_config import build_default_llm_config, load_llm_config_file, save_llm_config_file
+from persona_pet.llm_config import (
+    build_default_llm_config,
+    load_llm_config_file,
+    resolve_project_path,
+    save_llm_config_file,
+)
 from persona_pet.llm_client import LLMChatController
 from persona_pet.life_system import PersonaDriveSystem, PersonaLifeSystem
 from persona_pet.life_writing import LifeWritingController
@@ -150,10 +155,10 @@ DIALOGUE_ROLE_LISTENER = "listener"
 DIALOGUE_ROLE_SPEAKER = "speaker"
 
 # Runtime profile controls.
-# Default remains "test" to preserve the existing IDE behavior.
+# Default is "main" so GitHub users edit the same config file that the app reads on first run.
 # Use --profile main, --profile test, or PERSONA_RUN_PROFILE=main/test to choose explicitly.
 # Use --reset-profile once to wipe a non-main profile at startup.
-PROFILE_SELECTION = apply_runtime_profile(default_profile="test", default_reset=False, argv=sys.argv)
+PROFILE_SELECTION = apply_runtime_profile(default_profile="main", default_reset=False, argv=sys.argv)
 RUN_PROFILE = PROFILE_SELECTION["profile"]
 RESET_PROFILE_ON_START = PROFILE_SELECTION["reset"]
 
@@ -374,6 +379,7 @@ class Live2DDesktopPet(
             client_kwargs=llm_client_kwargs(),
             default_config=DEFAULT_LLM_CONFIG,
             runtime=self.runtime,
+            base_dir=BASE_DIR,
         )
         self.life_writer = LifeWritingController(
             config=self.llm_config,
@@ -1781,10 +1787,10 @@ def main():
         try:
             from persona_pet.qwen_tts_engine import QwenTTSEngine
             engine = QwenTTSEngine(
-                model_path=str(llm_config.get("qwen_tts_model_path") or "").strip(),
-                ref_dir=str(llm_config.get("qwen_tts_ref_dir") or "").strip(),
-                ref_audio=str(llm_config.get("qwen_tts_ref_audio") or "").strip(),
-                ref_text=str(llm_config.get("qwen_tts_ref_text") or "").strip(),
+                model_path=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_model_path")),
+                ref_dir=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_ref_dir")),
+                ref_audio=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_ref_audio")),
+                ref_text=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_ref_text")),
                 xvec_only=config_bool(llm_config, "qwen_tts_xvec_only", False),
                 do_sample=config_bool(llm_config, "qwen_tts_do_sample", True),
                 seed=int(llm_config.get("qwen_tts_seed", 24681357) or 24681357),

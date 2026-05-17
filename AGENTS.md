@@ -5,10 +5,10 @@ This repository is the local `person_test_all` AI desktop pet project. It is a s
 ## Run
 
 ```powershell
-.\.venv\Scripts\python.exe .\persona_bot_test.py
+.\.venv\Scripts\python.exe .\persona_bot_test.py --profile main
 ```
 
-Use `run_persona_bot_test.bat` only as a convenience wrapper.
+Use `setup_persona_bot_test.bat` for first-run setup and `run_persona_bot_test.bat` as the checked launcher.
 
 ## Shape
 
@@ -37,7 +37,7 @@ Use `run_persona_bot_test.bat` only as a convenience wrapper.
 - Be conservative with machine-specific absolute paths in defaults.
 - Do not delete or rewrite assets, generated outputs, model files, or third-party engines unless explicitly asked.
 - Treat file/browser agent code, path handling, local config, and API keys as security-sensitive.
-- Preserve current profile behavior unless asked. `persona_bot_test.py` currently uses `RUN_PROFILE = "test"`.
+- Preserve current profile behavior unless asked. GitHub/new-user startup now defaults to `RUN_PROFILE = "main"`.
 
 ## Validation
 

@@ -9,6 +9,7 @@ import time
 from PyQt5.QtCore import QTimer
 
 from persona_pet.error_reporter import report_exception
+from persona_pet.llm_config import resolve_project_path
 
 
 DEFAULT_GODOT_PROJECT_DIR = ""
@@ -18,10 +19,11 @@ DEFAULT_HOME_ICON_IDLE_SECONDS = 600.0
 
 class GodotBridgeMixin:
     def setup_godot_bridge(self):
-        bridge_dir = getattr(self, "godot_bridge_dir", "") or os.path.join(getattr(self, "base_dir", os.getcwd()), "outputs", "godot_bridge")
+        base_dir = getattr(self, "base_dir", os.getcwd())
+        bridge_dir = getattr(self, "godot_bridge_dir", "") or os.path.join(base_dir, "outputs", "godot_bridge")
         os.makedirs(bridge_dir, exist_ok=True)
-        self.godot_project_dir = str(self.llm_config.get("godot_project_dir") or DEFAULT_GODOT_PROJECT_DIR)
-        self.godot_executable = str(self.llm_config.get("godot_executable") or DEFAULT_GODOT_EXE)
+        self.godot_project_dir = resolve_project_path(base_dir, self.llm_config.get("godot_project_dir") or DEFAULT_GODOT_PROJECT_DIR)
+        self.godot_executable = resolve_project_path(base_dir, self.llm_config.get("godot_executable") or DEFAULT_GODOT_EXE)
         self.godot_bridge_path = os.path.join(bridge_dir, "persona_to_game.json")
         self.godot_state_path = os.path.join(bridge_dir, "game_to_persona.json")
         self.godot_process = None
@@ -35,8 +37,8 @@ class GodotBridgeMixin:
         self.home_icon_mode = False
         self.home_icon_idle_seconds = float(self.llm_config.get("home_icon_idle_seconds", DEFAULT_HOME_ICON_IDLE_SECONDS) or DEFAULT_HOME_ICON_IDLE_SECONDS)
         self.home_icon_path = str(
-            self.llm_config.get("home_icon_path")
-            or os.path.join(getattr(self, "base_dir", os.getcwd()), "assets", "room_icon", "star_room_icon_256.png")
+            resolve_project_path(base_dir, self.llm_config.get("home_icon_path"))
+            or os.path.join(base_dir, "assets", "room_icon", "star_room_icon_256.png")
         )
         self.home_icon_previous_size = None
         self.home_icon_rect = None

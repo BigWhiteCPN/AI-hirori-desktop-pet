@@ -2,33 +2,51 @@
 
 这是一个本地运行的 Live2D AI 桌宠项目，包含对话、语音输入、TTS、记忆、主动行为、小屋模式和城市地图。
 
-项目目录可以放在任意盘符、任意路径，不要求放在 `E:` 盘。
+项目目录可以放在任意盘符、任意路径，不要求放在固定目录。仓库内默认只使用相对路径；如果你需要接入外部工具或外部项目，再把那些机器专属路径写到你自己的 `persona_llm_config.json`。
 
-## 快速开始
+## 新用户最快上手
+
+1. 克隆仓库
+2. 双击 `setup_persona_bot_test.bat`
+3. 按提示填写 `persona_llm_config.json`
+4. 双击 `run_persona_bot_test.bat`
+
+命令行方式：
 
 ```powershell
 git clone https://github.com/BigWhiteCPN/AI-hirori-desktop-pet.git
 cd AI-hirori-desktop-pet
+.\setup_persona_bot_test.bat
+.\run_persona_bot_test.bat
+```
+
+`setup_persona_bot_test.bat` 会做这些事：
+
+- 创建 `.venv`
+- 安装 `requirements_runtime.txt`
+- 如果缺少 `persona_llm_config.json`，就从 `persona_llm_config.release.json` 复制一份
+- 运行 `tools/doctor.py` 做环境预检
+
+## 手动启动
+
+```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -U pip
 .\.venv\Scripts\python.exe -m pip install -r .\requirements_runtime.txt
 Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
-.\.venv\Scripts\python.exe .\persona_bot_test.py
+.\.venv\Scripts\python.exe .\tools\doctor.py
+.\.venv\Scripts\python.exe .\persona_bot_test.py --profile main
 ```
 
-浏览器代理相关依赖是可选项：
+说明：
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r .\requirements_browser_agent.txt
-```
+- GitHub 发布场景默认使用 `main` profile
+- 首次运行主要读取的是 `persona_llm_config.json`
+- 如果你要做多 profile 调试，再显式使用 `--profile test` 或 `PERSONA_RUN_PROFILE=test`
 
-也可以直接双击 `run_persona_bot_test.bat`。
+## 首次配置
 
-## API 模型
-
-默认配置是 API 模型模式。
-
-你可以二选一：
+默认配置是 API 模式。你可以二选一：
 
 - 在 `persona_llm_config.json` 中填写 `api_key`
 - 设置环境变量 `DEEPSEEK_API_KEY`
@@ -38,74 +56,80 @@ Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
 - `DOUBAO_ASR_API_KEY`
 - `VOLCENGINE_TTS_API_KEY`
 
-## 本地模型
+`.env.example` 里保留了这些环境变量名，便于参考。
 
-项目里的本地 TTS 使用 `faster-qwen3-tts`，底层模型是 Qwen3-TTS。代码支持你直接填写不同的 Qwen3-TTS 模型名或本地目录，`0.6B` 和 `1.7B` 都可以用。
+## 路径规则
 
-本地 TTS 不是“零门槛 CPU 模式”。按 `faster-qwen3-tts` 官方说明，它至少需要 Python 3.10+、PyTorch 2.5.1+、NVIDIA GPU 和 CUDA。
+为了让别人从 GitHub 下载后更容易使用，仓库现在遵循下面几条规则：
 
-建议：
+- 文档和脚本优先使用相对路径
+- 项目内资源默认相对于仓库根目录解析
+- `third_party/...`、`assets/...`、`.\...`、`..\...` 这类配置路径都可以跨电脑迁移
+- 外部程序路径，比如 Tesseract、Godot，可留空或写到你自己的本地配置里
+- 不要把你机器上的绝对路径提交到 README、模板配置或脚本
 
-- 显存和加载速度优先：`Qwen/Qwen3-TTS-12Hz-0.6B-Base`
-- 质量优先并且显存更充足：`Qwen/Qwen3-TTS-12Hz-1.7B-Base`
+## 本地 TTS
 
-### 方案一：首次运行时自动下载
+项目里的本地 TTS 使用 `faster-qwen3-tts`，底层模型是 Qwen3-TTS。
 
-如果你的电脑可以访问 Hugging Face，可以在 `persona_llm_config.json` 里设置：
+推荐两种写法：
 
-```json
-{
-  "tts_provider": "local",
-  "qwen_tts_model_path": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-}
-```
+- 远程模型 ID：`Qwen/Qwen3-TTS-12Hz-1.7B-Base`
+- 项目内相对路径：`third_party/qwen_tts_model`
 
-这样第一次加载本地 TTS 时会按模型名下载权重。
+如果你使用项目内默认目录，下面这些字段都可以写相对路径：
 
-### 方案二：手动下载到项目目录
+- `qwen_tts_model_path`
+- `qwen_tts_ref_dir`
+- `qwen_tts_ref_audio`
+- `qwen_tts_ref_text`
 
-如果你希望手动管理模型，推荐放到项目默认路径，这样配置里可以少填很多内容。
-
-Hugging Face CLI：
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -U "huggingface_hub[cli]"
-huggingface-cli download Qwen/Qwen3-TTS-12Hz-1.7B-Base --local-dir .\third_party\qwen_tts_model
-```
-
-ModelScope：
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -U modelscope
-modelscope download --model Qwen/Qwen3-TTS-12Hz-1.7B-Base --local_dir .\third_party\qwen_tts_model
-```
-
-然后准备参考音频和参考文本：
+默认参考文件位置：
 
 - `third_party/qwen_tts_refs/neutral.wav`
 - `third_party/qwen_tts_refs/neutral.txt`
 
-再把 `persona_llm_config.json` 里的 `tts_provider` 改成 `local` 即可。如果你使用上面的默认目录，`qwen_tts_model_path`、`qwen_tts_ref_dir`、`qwen_tts_ref_audio`、`qwen_tts_ref_text` 都可以继续留空。
+本地 TTS 不是零门槛 CPU 模式。通常至少需要：
+
+- Python 3.10+
+- PyTorch 2.5.1+
+- NVIDIA GPU
+- 可用的 CUDA 环境
 
 ## 本地语音识别
 
 这个项目的语音识别有两种模式：
 
-- 云端模式：`speech_provider = "doubao"`，这是当前默认值，不需要下载本地识别模型
-- 本地模式：`speech_provider = "local"`，会使用 `FunASR + iic/SenseVoiceSmall`
+- 云端模式：`speech_provider = "doubao"`，默认值，不需要下载本地识别模型
+- 本地模式：`speech_provider = "local"`，使用 `FunASR + SenseVoiceSmall`
 
-如果切到本地语音识别，项目会在第一次加载时自动下载并缓存 `SenseVoiceSmall` 及其相关模型文件。当前这条本地 ASR 链路不是 `faster-whisper`。
+切到本地模式后，模型会在首次使用时自动下载和缓存。
 
-也就是说：
+## 可选功能依赖
 
-- 默认 API 语音识别：不需要额外下载本地 ASR 模型
-- 想离线本地识别：需要首次下载 `SenseVoiceSmall` 相关模型，通常首次运行自动完成
+浏览器代理不是默认必需项：
 
-### 参考音频要求
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r .\requirements_browser_agent.txt
+```
 
-- 建议 3 到 15 秒
-- 人声清晰，尽量无背景噪音
-- `neutral.txt` 内容要和参考音频里说的话尽量一致
+`tools/doctor.py` 会额外提示这些可选能力是否可用：
+
+- browser agent
+- OCR / 截图问答
+- keyring 凭据存储
+- 本地 TTS
+- 本地 ASR
+
+## 常用命令
+
+```powershell
+.\setup_persona_bot_test.bat
+.\run_persona_bot_test.bat
+.\.venv\Scripts\python.exe .\tools\doctor.py
+.\.venv\Scripts\python.exe .\persona_bot_test.py --profile main
+.\.venv\Scripts\python.exe -m compileall persona_bot_test.py persona_pet
+```
 
 ## 目录说明
 
@@ -115,9 +139,10 @@ modelscope download --model Qwen/Qwen3-TTS-12Hz-1.7B-Base --local_dir .\third_pa
 - `assets/city_map/`：城市地图资源
 - `assets/room_icon/`：小屋图标资源
 - `hiyori_pro_zh/`：Live2D 模型资源
+- `tools/doctor.py`：环境预检
 - `tools/`：本地维护工具
 
-## 常用操作
+## 键位
 
 - `V` / `F2`：开启自由语音监听
 - `N`：关闭自由语音监听
@@ -149,7 +174,8 @@ git status --short --ignored
 
 ## 常见问题
 
-- 本地 TTS 无法加载：先确认已经安装 `requirements_runtime.txt`，再确认 `tts_provider` 是 `local`
-- 本地 TTS 找不到模型：检查 `third_party/qwen_tts_model/` 是否存在，或确认 `qwen_tts_model_path` 是否填写为有效模型名/目录
-- 本地 TTS 没声音：检查 `third_party/qwen_tts_refs/neutral.wav` 和 `neutral.txt`
+- 双击启动脚本报缺环境：先运行 `setup_persona_bot_test.bat`
+- 改了 `persona_llm_config.json` 但程序没读到：请确认你是用 `--profile main` 启动
+- 本地 TTS 找不到模型：检查 `qwen_tts_model_path` 是远程模型 ID，还是项目内相对路径
+- OCR 不可用：安装 Tesseract，或在配置里填写 `tesseract_cmd`
 - Live2D 加载失败：确认 `hiyori_pro_zh/hiyori_pro_zh/runtime/hiyori_pro_t11.model3.json` 存在

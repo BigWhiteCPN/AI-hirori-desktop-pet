@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from persona_pet.error_reporter import report_exception
+from persona_pet.llm_config import resolve_project_path
 from persona_pet.memory import compact_text, contains_any, normalize_prosody_hint, strip_stage_directions
 from persona_pet.runtime import get_default_runtime
 from persona_pet.behavior import (
@@ -528,10 +529,10 @@ class VoicevoxController:
 
         engine = QwenTTSEngine.get_instance()
         if engine is None:
-            model_path = str(self.config.get("qwen_tts_model_path") or "").strip()
-            ref_dir = str(self.config.get("qwen_tts_ref_dir") or "").strip()
-            ref_audio = str(self.config.get("qwen_tts_ref_audio") or "").strip()
-            ref_text = str(self.config.get("qwen_tts_ref_text") or "").strip()
+            model_path = resolve_project_path(BASE_DIR, self.config.get("qwen_tts_model_path"))
+            ref_dir = resolve_project_path(BASE_DIR, self.config.get("qwen_tts_ref_dir"))
+            ref_audio = resolve_project_path(BASE_DIR, self.config.get("qwen_tts_ref_audio"))
+            ref_text = resolve_project_path(BASE_DIR, self.config.get("qwen_tts_ref_text"))
             engine = QwenTTSEngine(
                 model_path=model_path,
                 ref_dir=ref_dir,

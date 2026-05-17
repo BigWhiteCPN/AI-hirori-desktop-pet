@@ -2,55 +2,61 @@
 
 这个目录是桌宠项目的可运行工作区，入口文件是 `persona_bot_test.py`。
 
-项目可以放在任意路径，不要求固定盘符。
+## 推荐启动方式
 
-## 运行
+首次运行：
+
+```powershell
+.\setup_persona_bot_test.bat
+```
+
+日常启动：
+
+```powershell
+.\run_persona_bot_test.bat
+```
+
+## 手动方式
 
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -U pip
 .\.venv\Scripts\python.exe -m pip install -r .\requirements_runtime.txt
 Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
-.\.venv\Scripts\python.exe .\persona_bot_test.py
+.\.venv\Scripts\python.exe .\tools\doctor.py
+.\.venv\Scripts\python.exe .\persona_bot_test.py --profile main
 ```
-
-或运行 `run_persona_bot_test.bat`。
 
 ## 首次配置
 
-- API 模型：填写 `persona_llm_config.json`，或设置 `DEEPSEEK_API_KEY`
+- API 模式：在 `persona_llm_config.json` 填 `api_key`，或设置 `DEEPSEEK_API_KEY`
 - 本地 TTS：把 `tts_provider` 改成 `local`
-- 如果使用默认项目目录结构，本地 TTS 模型放在 `third_party/qwen_tts_model/`
-- 参考音频和文本放在 `third_party/qwen_tts_refs/neutral.wav` 与 `neutral.txt`
-- 本地 TTS 按 `faster-qwen3-tts` 官方说明需要 Python 3.10+、PyTorch 2.5.1+、NVIDIA GPU 和 CUDA
-- 语音识别默认是 `speech_provider = "doubao"`，不需要下载本地识别模型
-- 如果改成 `speech_provider = "local"`，项目会在首次使用时自动下载并缓存 `SenseVoiceSmall` 相关模型
+- 默认本地 TTS 模型目录：`third_party/qwen_tts_model/`
+- 默认参考音频和文本：`third_party/qwen_tts_refs/neutral.wav`、`third_party/qwen_tts_refs/neutral.txt`
+- 默认语音识别是 `speech_provider = "doubao"`
+- 如果改成 `speech_provider = "local"`，首次使用会自动下载本地识别模型
 
-## 必要文件
+## 路径约定
 
-- `hiyori_pro_zh/`：Live2D 模型
-- `persona_pet/`：功能模块
-- `assets/room/`：小屋背景和布局
-- `assets/city_map/`：城市地图背景
-- `persona_llm_config.release.json`：发布模板配置
+- 仓库里的文档和脚本优先使用相对路径
+- 项目内资源路径默认相对于仓库根目录
+- 外部程序或外部项目路径只建议保存在你自己的 `persona_llm_config.json`
 
-## 本地模型下载
+## 可选依赖
 
-Hugging Face CLI：
+浏览器代理：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -U "huggingface_hub[cli]"
-huggingface-cli download Qwen/Qwen3-TTS-12Hz-1.7B-Base --local-dir .\third_party\qwen_tts_model
+.\.venv\Scripts\python.exe -m pip install -r .\requirements_browser_agent.txt
 ```
 
-ModelScope：
+## 自检
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -U modelscope
-modelscope download --model Qwen/Qwen3-TTS-12Hz-1.7B-Base --local_dir .\third_party\qwen_tts_model
+.\.venv\Scripts\python.exe .\tools\doctor.py
 ```
 
-## 本地生成物
+## 本地生成文件
 
 这些目录会在运行时自动生成，不适合提交：
 

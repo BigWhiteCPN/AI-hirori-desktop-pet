@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 
 from persona_pet.credential_store import (
     externalize_config_secrets,
@@ -12,6 +13,23 @@ from persona_pet.error_reporter import report_exception_to_file
 from persona_pet.prompts import PROSODY_PROMPT_CONTRACT
 
 CONFIG_SCHEMA_VERSION = 2
+PROJECT_RELATIVE_ROOT_HINTS = (
+    "assets",
+    "docs",
+    "hiyori_pro_zh",
+    "logs",
+    "models",
+    "model",
+    "outputs",
+    "persona_pet",
+    "tests",
+    "third_party",
+    "tools",
+)
+WINDOWS_TESSERACT_CANDIDATES = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+)
 
 
 def _config_error_log_path(path):
@@ -25,6 +43,56 @@ def _clamp_number(value, default, low, high, cast=float):
     except Exception:
         number = cast(default)
     return max(low, min(high, number))
+
+
+def looks_like_remote_model_id(value):
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if text.startswith(("http://", "https://", "./", ".\\", "../", "..\\", "~")):
+        return False
+    if os.path.isabs(text):
+        return False
+    if "\\" in text:
+        return False
+    normalized = text.replace("\\", "/")
+    first = normalized.split("/", 1)[0].strip().lower()
+    if first in PROJECT_RELATIVE_ROOT_HINTS:
+        return False
+    return normalized.count("/") == 1
+
+
+def resolve_project_path(base_dir, value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    expanded = os.path.expanduser(text)
+    if os.path.isabs(expanded):
+        return os.path.normpath(expanded)
+    normalized = expanded.replace("\\", "/")
+    first = normalized.split("/", 1)[0].strip().lower()
+    if normalized.startswith(("./", "../")) or "\\" in text or first in PROJECT_RELATIVE_ROOT_HINTS:
+        root = os.path.abspath(base_dir or os.getcwd())
+        return os.path.normpath(os.path.join(root, normalized.replace("/", os.sep)))
+    return text
+
+
+def resolve_tesseract_cmd(base_dir, configured=""):
+    configured_path = resolve_project_path(base_dir, configured)
+    if configured_path:
+        if os.path.isfile(configured_path):
+            return configured_path
+        command_name = os.path.basename(configured_path)
+        resolved = shutil.which(command_name if command_name else configured_path)
+        if resolved:
+            return resolved
+    resolved = shutil.which("tesseract")
+    if resolved:
+        return resolved
+    for candidate in WINDOWS_TESSERACT_CANDIDATES:
+        if os.path.isfile(candidate):
+            return candidate
+    return configured_path
 
 
 def build_default_llm_config(
@@ -71,7 +139,7 @@ def build_default_llm_config(
         "volcengine_tts_volume_ratio": 1.0,
         "volcengine_tts_pitch_ratio": 1.0,
         "ocr_provider": "tesseract",
-        "tesseract_cmd": r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        "tesseract_cmd": "",
         "tesseract_lang": "chi_sim+eng",
         "singing_enabled": singing_enabled,
         "singing_provider": "volcengine_tts",

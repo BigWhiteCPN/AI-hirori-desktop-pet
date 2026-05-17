@@ -6,6 +6,7 @@ from PyQt5.QtCore import QPoint, QRect, Qt
 from PyQt5.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QPushButton, QRubberBand, QTextEdit, QVBoxLayout, QWidget
 
 from persona_pet.llm_client import LLMClient
+from persona_pet.llm_config import resolve_tesseract_cmd
 from persona_pet.memory import compact_text
 from persona_pet.runtime import get_default_runtime
 
@@ -20,12 +21,13 @@ class ChatAdviceEvent:
 
 
 class ChatAdviceController:
-    def __init__(self, config=None, memory_store=None, client_kwargs=None, default_config=None, runtime=None):
+    def __init__(self, config=None, memory_store=None, client_kwargs=None, default_config=None, runtime=None, base_dir=""):
         self.default_config = dict(default_config or {})
         self.client_kwargs = dict(client_kwargs or {})
         self.config = dict(config or self.default_config)
         self.memory_store = memory_store
         self.runtime = runtime or get_default_runtime()
+        self.base_dir = str(base_dir or "")
         self.client = LLMClient(config=self.config, memory_store=memory_store, **self.client_kwargs)
         self.lock = threading.Lock()
         self.busy = False
@@ -92,7 +94,7 @@ class ChatAdviceController:
         except Exception as exc:
             raise RuntimeError(f"缺少 OCR 依赖：{exc}") from exc
 
-        tesseract_cmd = str(self.config.get("tesseract_cmd") or "").strip()
+        tesseract_cmd = resolve_tesseract_cmd(self.base_dir, self.config.get("tesseract_cmd"))
         if tesseract_cmd:
             pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
         lang = str(self.config.get("tesseract_lang") or "chi_sim+eng").strip() or "chi_sim+eng"
