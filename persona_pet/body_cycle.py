@@ -7,28 +7,28 @@ from datetime import date, datetime, timedelta
 
 CYCLE_PHASES = {
     "menstrual": {
-        "label": "经期",
+        "label": "月影期",
         "mood_effect": {"sensitivity": 0.35, "irritability": 0.20, "fatigue": 0.25, "appetite": -0.12},
         "comfort_effect": -15.0,
         "energy_effect": -10.0,
         "description": "身体不太舒服，更敏感，也更需要温柔和稳定感。",
     },
     "follicular": {
-        "label": "卵泡期",
+        "label": "新芽期",
         "mood_effect": {"sensitivity": -0.10, "energy_boost": 0.15, "openness": 0.10},
         "comfort_effect": 5.0,
         "energy_effect": 5.0,
         "description": "状态逐渐恢复，心情更轻快。",
     },
     "ovulation": {
-        "label": "排卵期",
+        "label": "花信期",
         "mood_effect": {"sensitivity": 0.05, "affection_boost": 0.20, "playfulness": 0.15},
         "comfort_effect": 8.0,
         "energy_effect": 8.0,
         "description": "精力更好，更愿意靠近和互动。",
     },
     "luteal": {
-        "label": "黄体期",
+        "label": "微澜期",
         "mood_effect": {"sensitivity": 0.20, "irritability": 0.15, "craving": 0.25, "appetite": 0.18},
         "comfort_effect": -5.0,
         "energy_effect": -3.0,
@@ -296,10 +296,10 @@ class BodyCycleSystem:
         today = date.today()
         month_days = calendar.monthrange(today.year, today.month)[1]
         lines = [
-            f"生理周期：{phase_info['label']}（阶段第{phase_info['day']}天 / 周期第{phase_info['cycle_day']}天）",
+            f"身体节律：{phase_info['label']}（阶段第{phase_info['day']}天 / 节律第{phase_info['cycle_day']}天）",
             f"本月日历：{today.year}-{today.month:02d}，共 {month_days} 天；生日 06-01。",
             f"状态：{phase_info['description']}",
-            f"亲近需求：{sexual['label']}（{sexual['level']}%，增长 x{sexual['growth_multiplier']:.1f}）",
+            f"亲近需求：{sexual['label']}（{sexual['level']}%，变化 x{sexual['growth_multiplier']:.1f}）",
         ]
         return "\n".join(lines)
 

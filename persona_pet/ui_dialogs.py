@@ -32,7 +32,7 @@ class FirstRunDialog(QDialog):
         self.tts_defaults = dict(tts_defaults or {})
         self.setWindowTitle("第一次连接")
         self.setModal(True)
-        self.resize(1240, 600)
+        self.resize(1240, 720)
         self.setMinimumWidth(1160)
         self.fields = {}
         self.setStyleSheet(
@@ -66,7 +66,7 @@ class FirstRunDialog(QDialog):
                 padding: 0 8px;
                 background: #fff6fb;
             }
-            QLineEdit, QComboBox {
+            QLineEdit, QComboBox, QTextEdit {
                 min-height: 30px;
                 padding: 5px 9px;
                 border: 1px solid rgba(225, 135, 180, 210);
@@ -111,6 +111,19 @@ class FirstRunDialog(QDialog):
         idx = self.gender_box.findText(current_gender)
         self.gender_box.setCurrentIndex(idx if idx >= 0 else 2)
         profile_form.addRow("性别", self.gender_box)
+
+        persona_form = self.add_section(layout, "人物背景经历")
+        background_hint = QLabel("留空会使用默认苏念背景；填写后会作为她的稳定背景经历参与对话。")
+        background_hint.setObjectName("hintLabel")
+        background_hint.setWordWrap(True)
+        persona_form.addRow("", background_hint)
+        self.add_text_area(
+            persona_form,
+            "背景经历",
+            "persona_background",
+            placeholder="例如：她来自哪里、成长经历、重要关系、职业、价值观、来到用户电脑前发生了什么。",
+            height=92,
+        )
 
         api_form = self.add_section(layout, "连接配置")
         self.add_field(api_form, "DeepSeek API Key", "api_key", password=True)
@@ -231,6 +244,15 @@ class FirstRunDialog(QDialog):
         form.addRow(label, field)
         self.fields[key] = field
 
+    def add_text_area(self, form, label, key, placeholder="", height=100):
+        initial = self.config.get(key, self.default_config.get(key, "")) or ""
+        field = QTextEdit(str(initial))
+        field.setAcceptRichText(False)
+        field.setPlaceholderText(str(placeholder or self.default_config.get(key, "")))
+        field.setMinimumHeight(int(height))
+        form.addRow(label, field)
+        self.fields[key] = field
+
     def add_browse_field(self, form, label, key, placeholder=""):
         initial = self.config.get(key, self.default_config.get(key, "")) or ""
         container = QWidget()
@@ -257,6 +279,7 @@ class FirstRunDialog(QDialog):
         data["user_gender"] = self.gender_box.currentText()
         data["onboarding_complete"] = True
         data["onboarding_first_greeting_pending"] = True
+        data["persona_background"] = self.fields["persona_background"].toPlainText().strip()
         api_key = self.fields["api_key"].text().strip()
         if api_key:
             data["api_key"] = api_key
@@ -325,7 +348,7 @@ class ApiSettingsDialog(QDialog):
             QLabel {
                 color: #6b4058;
             }
-            QLineEdit {
+            QLineEdit, QTextEdit {
                 min-height: 30px;
                 padding: 5px 9px;
                 border: 1px solid rgba(225, 135, 180, 210);
@@ -396,6 +419,19 @@ class ApiSettingsDialog(QDialog):
         self.add_field(llm_form, "接口地址", "base_url", placeholder="https://api.deepseek.com")
         self.add_field(llm_form, "API Key", "api_key", password=True)
         self.add_field(llm_form, "环境变量", "api_key_env", placeholder="DEEPSEEK_API_KEY")
+
+        persona_form = self.add_section(panel_layout, "人物背景经历")
+        persona_hint = QLabel("留空会使用默认苏念背景；填写后会作为她的稳定背景经历参与对话。")
+        persona_hint.setObjectName("hintLabel")
+        persona_hint.setWordWrap(True)
+        persona_form.addRow("", persona_hint)
+        self.add_text_area(
+            persona_form,
+            "背景经历",
+            "persona_background",
+            placeholder="例如：她来自哪里、成长经历、重要关系、职业、价值观、来到用户电脑前发生了什么。",
+            height=130,
+        )
 
         asr_form = self.add_section(panel_layout, "语音识别")
         # ASR provider selector
@@ -531,6 +567,15 @@ class ApiSettingsDialog(QDialog):
         form.addRow(label, field)
         self.fields[key] = field
 
+    def add_text_area(self, form, label, key, placeholder="", height=120):
+        initial = self.config.get(key, self.default_config.get(key, "")) or ""
+        field = QTextEdit(str(initial))
+        field.setAcceptRichText(False)
+        field.setPlaceholderText(str(placeholder or self.default_config.get(key, "")))
+        field.setMinimumHeight(int(height))
+        form.addRow(label, field)
+        self.fields[key] = field
+
     def add_browse_field(self, form, label, key, placeholder=""):
         initial = self.config.get(key, self.default_config.get(key, "")) or ""
         container = QWidget()
@@ -555,7 +600,10 @@ class ApiSettingsDialog(QDialog):
     def values(self):
         data = dict(self.config)
         for key, field in self.fields.items():
-            data[key] = field.text().strip()
+            if isinstance(field, QTextEdit):
+                data[key] = field.toPlainText().strip()
+            else:
+                data[key] = field.text().strip()
         provider = self.tts_provider_combo.currentData()
         data["tts_provider"] = provider
         if provider != "local":

@@ -17,7 +17,7 @@ class StartupSplashWindow(QDialog):
         self._max_seconds = float(max_seconds)
         self._tick = 0
 
-        self.setWindowTitle("唤醒苏念")
+        self.setWindowTitle("唤醒角色")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, False)
         self.setWindowModality(Qt.ApplicationModal)
@@ -124,7 +124,7 @@ class StartupSplashWindow(QDialog):
         painter.drawText(
             QRectF(panel_rect.left() + 172, content_top + 40, panel_rect.width() - 206, 34),
             Qt.AlignLeft | Qt.AlignVCenter,
-            "唤醒苏念",
+            "唤醒角色",
         )
 
         painter.setPen(QColor(143, 73, 110))

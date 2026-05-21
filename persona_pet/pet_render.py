@@ -6,7 +6,7 @@ import time
 import traceback
 
 import live2d.v3 as live2d
-from PyQt5.QtCore import QRectF, Qt, QTimer
+from PyQt5.QtCore import QRectF, Qt, QThread, QTimer
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPixmap
 from PyQt5.QtWidgets import QAction, QActionGroup, QMenu
 from live2d.v3.params import StandardParams
@@ -98,6 +98,9 @@ class PetRenderMixin:
         )
 
     def show_chat_status(self, text, seconds=2.6):
+        if hasattr(self, "run_on_ui") and QThread.currentThread() != self.thread():
+            self.run_on_ui(lambda: self.show_chat_status(text, seconds=seconds))
+            return
         if hasattr(self, "memory_associate_output"):
             self.memory_associate_output(text, source="status")
         self.chat_status_text = text
@@ -264,9 +267,11 @@ class PetRenderMixin:
             if hasattr(self, 'body_cycle'):
                 self.body_cycle.tick(now=now)
             if hasattr(self, 'idle_scheduler'):
-                idle_seconds = now - self.last_user_interaction_at
-                energy = self.drive.values.get('energy', 50.0)
-                self.idle_scheduler.tick(now=now, busy=busy, energy=energy, idle_seconds=idle_seconds)
+                idle_ready_at = float(getattr(self, "idle_scheduler_ready_at", 0.0) or 0.0)
+                if not getattr(self, "idle_scheduler_suspended", False) and now >= idle_ready_at:
+                    idle_seconds = now - self.last_user_interaction_at
+                    energy = self.drive.values.get('energy', 50.0)
+                    self.idle_scheduler.tick(now=now, busy=busy, energy=energy, idle_seconds=idle_seconds)
             self.update_barge_in_monitor()
             if self.maybe_auto_enter_home_icon(now=now, busy=busy):
                 self.draw_home_icon_surface()
@@ -307,8 +312,11 @@ class PetRenderMixin:
             live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)
             try:
                 self.model.Update()
-            except Exception:
-                pass
+            except Exception as exc:
+                last_error_at = float(getattr(self, "_last_model_update_error_at", 0.0) or 0.0)
+                if now - last_error_at > 3.0:
+                    self._last_model_update_error_at = now
+                    self.runtime_logger("MODEL_UPDATE_ERROR", str(exc))
             late_params = {}
             late_params.update(self._motion_finished_reset_params(final_params))
             late_params.update(self._update_mouse_gaze_params(final_params, now=now))
@@ -320,8 +328,11 @@ class PetRenderMixin:
                 apply_params(self.model, late_mouth_params)
             try:
                 self.model.Draw()
-            except Exception:
-                pass
+            except Exception as exc:
+                last_error_at = float(getattr(self, "_last_model_draw_error_at", 0.0) or 0.0)
+                if now - last_error_at > 3.0:
+                    self._last_model_draw_error_at = now
+                    self.runtime_logger("MODEL_DRAW_ERROR", str(exc))
             if self.room_mode:
                 self.draw_room_background(behind_model=True)
                 self.draw_room_foreground()

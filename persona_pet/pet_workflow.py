@@ -509,7 +509,7 @@ class PetWorkflowMixin:
         else:
             lines.append(reaction["prompt_direction"])
 
-        lines.append("请只回复一句中文短句，不超过20字，口语化，不要旁白，不要括号动作。")
+        lines.append("请只回复一句中文短句，不超过50字，口语化，不要旁白，不要括号动作。")
         return "\n".join(lines)
 
     def _build_stimulus_prompt(self, stimulus, reaction=None):
@@ -520,25 +520,25 @@ class PetWorkflowMixin:
                 f"用户刚才盯着你看了大约{float(stimulus.duration or 0.0):.1f}秒。\n"
                 f"当前关系阶段：{stage}。\n"
                 f"当前情绪主导：{emotion_snap.get('dominant', 'neutral')}。\n"
-                "请自然说一句短短的话，像是注意到对方在看你。不要超过20字。"
+                "请自然说一句短短的话，像是注意到对方在看你。不要超过50字。"
             )
         if stimulus.type == "work_overtime":
             return (
                 "用户已经连续工作很久了。\n"
                 f"当前关系阶段：{stage}。\n"
-                "请用关心但不过度打扰的语气，说一句提醒或安慰。不要超过20字。"
+                "请用关心但不过度打扰的语气，说一句提醒或安慰。不要超过50字。"
             )
         if stimulus.type == "late_night":
             return (
                 "现在已经很晚了，用户还在用电脑。\n"
                 f"当前关系阶段：{stage}。\n"
-                "请说一句简短关心的话，不要说教，不超过20字。"
+                "请说一句简短关心的话，不要说教，不超过50字。"
             )
         return (
             f"刚刚发生了一次互动事件：{stimulus.describe()}。\n"
             f"当前关系阶段：{stage}。\n"
             f"当前情绪主导：{emotion_snap.get('dominant', 'neutral')}。\n"
-            "请说一句自然的短回应，不超过20字。"
+            "请说一句自然的短回应，不超过50字。"
         )
 
     def _queue_stimulus_dialogue_retry(self, prompt, stimulus, memory_user_text="", emotion_override=""):
@@ -609,7 +609,16 @@ class PetWorkflowMixin:
         return False
 
     def _trigger_stimulus_dialogue(self, stimulus, reaction=None):
-        if not self._is_interaction_dialogue_allowed():
+        prompt = self._build_touch_prompt(stimulus, reaction) if stimulus.type == "touch" and reaction else self._build_stimulus_prompt(stimulus, reaction=reaction)
+        memory_user_text = stimulus.describe()
+        if reaction and reaction.get("name"):
+            memory_user_text = f"{memory_user_text}，反应={reaction['name']}"
+        emotion_override = ""
+        if reaction and reaction.get("emotion_tag") in LLM_EMOTIONS:
+            emotion_override = reaction["emotion_tag"]
+        elif stimulus.emotion_hint in LLM_EMOTIONS:
+            emotion_override = stimulus.emotion_hint
+        if not self._is_stimulus_dialogue_allowed(stimulus, reaction=reaction):
             print(
                 "STIMULUS_DIALOGUE_BLOCKED =",
                 {
@@ -617,11 +626,12 @@ class PetWorkflowMixin:
                     "zone": str(getattr(stimulus, "zone", "") or ""),
                 },
             )
-            return False
-        prompt = self._build_touch_prompt(stimulus, reaction) if stimulus.type == "touch" and reaction else self._build_stimulus_prompt(stimulus, reaction=reaction)
-        memory_user_text = stimulus.describe()
-        if reaction and reaction.get("name"):
-            memory_user_text = f"{memory_user_text}，反应={reaction['name']}"
+            return self._queue_stimulus_dialogue_retry(
+                prompt,
+                stimulus,
+                memory_user_text=memory_user_text,
+                emotion_override=emotion_override,
+            )
         status = {
             "touch": "她在感受你的触碰……",
             "stare": "她注意到你的视线了……",
@@ -629,11 +639,6 @@ class PetWorkflowMixin:
             "late_night": "她在悄悄提醒你……",
         }.get(stimulus.type, "她在思考这次互动……")
         self.show_chat_status(status, seconds=2.0)
-        emotion_override = ""
-        if reaction and reaction.get("emotion_tag") in LLM_EMOTIONS:
-            emotion_override = reaction["emotion_tag"]
-        elif stimulus.emotion_hint in LLM_EMOTIONS:
-            emotion_override = stimulus.emotion_hint
         started = self.chat.ask_async(
             prompt,
             initiated_by="stimulus",

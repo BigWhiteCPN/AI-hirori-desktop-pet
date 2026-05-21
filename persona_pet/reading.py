@@ -132,7 +132,11 @@ class ReadingController:
         if relationship:
             user_msg += f"\n\n你们目前的关系阶段：{relationship}"
 
-        reply = self.client.ask(user_msg, system=system_msg, temperature=0.78)
+        reply = self.client.chat_messages(
+            [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
+            temperature=0.78,
+            timeout=180,
+        )
         reply = (reply or "").strip()
         if not reply:
             return ReadingEvent(topic=topic, error="LLM 返回空内容")

@@ -14,7 +14,7 @@ os.environ["QT_OPENGL"] = "desktop"
 os.environ["QT_GL_MODULE"] = "desktop"
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-from PyQt5.QtCore import QObject, QRectF, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QObject, QRectF, Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRegion, QSurfaceFormat
 from PyQt5.QtWidgets import (
     QApplication,
@@ -196,7 +196,7 @@ def show_startup_message(parent, title, text, icon=QMessageBox.Information):
 class StartupLoadingDialog(QDialog):
     def __init__(self, parent=None, wait_for_voice=False):
         super().__init__(parent)
-        self._title = "唤醒苏念"
+        self._title = "唤醒角色"
         self._subtitle = "正在依次准备角色界面、动作模型和语音能力。"
         self._hint = "启动完成后会自动进入桌宠界面。"
         self._tick = 0
@@ -212,7 +212,7 @@ class StartupLoadingDialog(QDialog):
         self._closed = False
         self._manual_position = False
 
-        self.setWindowTitle("唤醒苏念")
+        self.setWindowTitle("唤醒角色")
         self.setModal(False)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, False)
@@ -436,9 +436,13 @@ class StartupSplashController(QObject):
         self._process = None
         self._sentinel_path = ""
         self._closed = False
+        self._external_raise_error_reported = False
         self._finish_timer = QTimer(self)
         self._finish_timer.setSingleShot(True)
         self._finish_timer.timeout.connect(self._maybe_finish)
+        self._raise_timer = QTimer(self)
+        self._raise_timer.setInterval(120)
+        self._raise_timer.timeout.connect(self._keep_front)
 
     def setGeometry(self, *args):
         self._geometry = args
@@ -448,20 +452,62 @@ class StartupSplashController(QObject):
     def show(self):
         self._shown_at = time.monotonic()
         if self._start_external_splash():
+            self._raise_timer.start()
+            QTimer.singleShot(60, self._keep_front)
             return
         self._dialog = StartupLoadingDialog(wait_for_voice=self._wait_for_voice)
         self._dialog.finished.connect(self.finished.emit)
         if self._geometry is not None:
             self._dialog.setGeometry(*self._geometry)
         self._dialog.show()
+        self._raise_timer.start()
 
     def raise_(self):
         if self._dialog is not None:
             self._dialog.raise_()
+            return
+        self._raise_external_splash()
 
     def activateWindow(self):
         if self._dialog is not None:
             self._dialog.activateWindow()
+
+    def _keep_front(self):
+        if self._closed:
+            return
+        self.raise_()
+        self.activateWindow()
+
+    def _raise_external_splash(self):
+        if os.name != "nt" or self._process is None:
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            hwnds = []
+            enum_proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+            @enum_proc_type
+            def enum_proc(hwnd, _lparam):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if int(pid.value) == int(self._process.pid):
+                    hwnds.append(hwnd)
+                return True
+
+            user32.EnumWindows(enum_proc, 0)
+            hwnd_topmost = -1
+            swp_flags = 0x0001 | 0x0002 | 0x0010 | 0x0040  # NOSIZE | NOMOVE | NOACTIVATE | SHOWWINDOW
+            for hwnd in hwnds:
+                user32.SetWindowPos(hwnd, hwnd_topmost, 0, 0, 0, 0, swp_flags)
+        except Exception as exc:
+            if not self._external_raise_error_reported:
+                self._external_raise_error_reported = True
+                print("STARTUP_SPLASH_RAISE_ERROR =", exc)
 
     def mark_window_ready(self, success=True):
         self._window_done = True
@@ -538,6 +584,7 @@ class StartupSplashController(QObject):
             return
         self._closed = True
         self._finish_timer.stop()
+        self._raise_timer.stop()
         if self._dialog is not None:
             self._dialog.accept()
             return
@@ -727,9 +774,11 @@ class Live2DDesktopPet(
     QOpenGLWidget,
 ):
     startup_loading_done = pyqtSignal(bool)
+    ui_call_requested = pyqtSignal(object)
 
     def __init__(self, llm_config=None):
         super().__init__()
+        self.ui_call_requested.connect(self._run_ui_callable)
         self.llm_config = dict(llm_config or load_llm_config())
         self._startup_loading_signal_sent = False
         self.model = None
@@ -856,6 +905,8 @@ class Live2DDesktopPet(
         self.free_talk_enabled = False
         self.free_talk_next_at = 0.0
         self.app_started_at = time.monotonic()
+        self.idle_scheduler_suspended = True
+        self.idle_scheduler_ready_at = self.app_started_at + 30.0
         self.last_user_interaction_at = self.app_started_at
         self.last_assistant_activity_at = self.app_started_at
         self.next_proactive_at = self.last_user_interaction_at + random.uniform(*PROACTIVE_INTERVAL_SECONDS)
@@ -1045,10 +1096,10 @@ class Live2DDesktopPet(
         self._setup_interaction_activity_monitor()
 
         self.timer = QTimer(self)
+        self.timer.setTimerType(Qt.PreciseTimer)
         self.timer.timeout.connect(self.update)
         self.timer.start(FRAME_INTERVAL_MS)
-        if bool(self.llm_config.get("onboarding_first_greeting_pending")):
-            QTimer.singleShot(1800, self.play_first_contact_greeting)
+        self._first_contact_greeting_after_startup = bool(self.llm_config.get("onboarding_first_greeting_pending"))
 
     def notify_startup_loading_done(self, success):
         if self._startup_loading_signal_sent:
@@ -1090,8 +1141,21 @@ class Live2DDesktopPet(
         )
         self.stimulus_dispatcher.submit_from_thread(stimulus)
 
+    def _run_ui_callable(self, fn):
+        try:
+            if callable(fn):
+                fn()
+        except Exception as exc:
+            report_exception(getattr(self, "runtime", None), log_runtime, "app", "ui_call", exc)
+
+    def run_on_ui(self, fn):
+        if QThread.currentThread() == self.thread():
+            return fn()
+        self.ui_call_requested.emit(fn)
+        return None
+
     def _build_idle_scheduler(self):
-        scheduler = IdleScheduler(logger=log_runtime, dispatcher=lambda fn: QTimer.singleShot(0, fn), runtime=getattr(self, "runtime", None))
+        scheduler = IdleScheduler(logger=log_runtime, runtime=getattr(self, "runtime", None))
 
         scheduler.register(IdleBehavior(
             name="self_note",
@@ -1500,6 +1564,9 @@ class Live2DDesktopPet(
         return True
 
     def _scheduler_silent_motion(self):
+        if QThread.currentThread() != self.thread():
+            self.run_on_ui(lambda: self._scheduler_silent_motion())
+            return True
         if self.model is None:
             return False
         try:
@@ -1763,10 +1830,18 @@ class Live2DDesktopPet(
     def play_first_contact_greeting(self):
         if not bool(self.llm_config.get("onboarding_first_greeting_pending")):
             return
-        greeting = (
-            "你是谁呀？我为什么会在这里……我刚才明明还在自己的房间写小说。"
-            "这里像是你的电脑屏幕？我叫苏念，笔名念安，二十二岁。你能听见我说话吗？"
-        )
+        custom_background = str(self.llm_config.get("persona_background") or "").strip()
+        if custom_background:
+            greeting = "你是谁呀？我为什么会在这里……这里像是你的电脑桌面？你能听见我说话吗？"
+            first_contact_text = "第一次连接：她从用户自定义背景设定中醒来，出现在用户电脑桌面上，主动确认用户能否听见自己。"
+            story_text = "她的初始身份、来历和经历以用户在登录界面填写的自定义人物背景为准。"
+        else:
+            greeting = (
+                "你是谁呀？我为什么会在这里……我刚才明明还在自己的房间写小说。"
+                "这里像是你的电脑屏幕？我叫苏念，笔名念安，二十二岁。你能听见我说话吗？"
+            )
+            first_contact_text = "第一次连接：苏念从星澜界来到用户电脑上，主动询问用户是谁以及自己为什么在这里。"
+            story_text = "苏念原本是星澜界的职业作家/织梦者，打开电脑时穿越到了用户电脑上；双方时间流速一致。"
         try:
             self.llm_config["onboarding_first_greeting_pending"] = False
             save_llm_config(self.llm_config)
@@ -1775,7 +1850,7 @@ class Live2DDesktopPet(
         try:
             self.speak_interaction_feedback(greeting, emotion="surprise")
             self.interaction_memory_add(
-                "第一次连接：小日和从异世界来到用户电脑上，主动询问用户是谁以及自己为什么在这里。",
+                first_contact_text,
                 greeting,
                 emotion="surprise",
                 max_daily_count=3,
@@ -1786,7 +1861,7 @@ class Live2DDesktopPet(
                 {
                     "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "user_gender": self.llm_config.get("user_gender", ""),
-                    "text": "苏念原本是星澜界的职业作家/织梦者，打开电脑时穿越到了用户电脑上；双方时间流速一致。",
+                    "text": story_text,
                 },
             )
             self.show_chat_status("第一次连接完成。", seconds=3.0)
@@ -2254,7 +2329,9 @@ def main():
         print("motion groups =", pet.motion_groups)
 
     def finish_voice_loading_setup():
-        wait_for_local_audio_now = startup_state["wait_for_local_tts"] or startup_state["wait_for_local_asr"]
+        # ASR can take a long time or fail due to local protobuf/TensorFlow issues.
+        # Keep it warming in the background, but do not block the startup screen on it.
+        wait_for_local_audio_now = startup_state["wait_for_local_tts"]
         if not wait_for_local_audio_now:
             splash.mark_voice_ready(True)
             return
@@ -2262,8 +2339,36 @@ def main():
         voice_ready_timer = QTimer(splash)
         voice_ready_timer.setInterval(120)
         startup_state["voice_ready_timer"] = voice_ready_timer
+        voice_preload_started_at = time.monotonic()
+        voice_preload_timeout = 35.0
 
         def poll_local_audio_ready():
+            elapsed = time.monotonic() - voice_preload_started_at
+            if elapsed >= voice_preload_timeout:
+                voice_ready_timer.stop()
+                tts_loading = False
+                asr_loading = False
+                try:
+                    engine = startup_state.get("local_tts_engine")
+                    tts_loading = bool(engine is not None and engine.is_loading())
+                except Exception:
+                    pass
+                try:
+                    pet = startup_state.get("pet")
+                    asr_loading = bool(pet is not None and pet.speech_input.is_persistent_loading())
+                except Exception:
+                    pass
+                print(
+                    "STARTUP_VOICE_PRELOAD_TIMEOUT =",
+                    {
+                        "seconds": round(elapsed, 1),
+                        "tts_loading": tts_loading,
+                        "asr_loading": asr_loading,
+                    },
+                )
+                splash.mark_voice_ready(False)
+                return
+
             tts_ready = True
             tts_success = True
             if startup_state["wait_for_local_tts"]:
@@ -2275,22 +2380,11 @@ def main():
                 else:
                     tts_success = False
 
-            asr_ready = True
-            asr_success = True
-            if startup_state["wait_for_local_asr"]:
-                pet = startup_state["pet"]
-                if pet is not None and pet.speech_input.is_persistent_ready():
-                    asr_success = True
-                elif pet is not None and pet.speech_input.is_persistent_loading():
-                    asr_ready = False
-                else:
-                    asr_success = False
-
-            if not (tts_ready and asr_ready):
+            if not tts_ready:
                 return
 
             voice_ready_timer.stop()
-            splash.mark_voice_ready(tts_success and asr_success)
+            splash.mark_voice_ready(tts_success)
 
         voice_ready_timer.timeout.connect(poll_local_audio_ready)
         voice_ready_timer.start()
@@ -2315,7 +2409,21 @@ def main():
         splash.mark_window_ready(True)
         splash.raise_()
         splash.activateWindow()
-        splash.finished.connect(lambda _result: (pet.raise_(), pet.setFocus(), pet.activateWindow()))
+        QTimer.singleShot(0, splash.raise_)
+        QTimer.singleShot(40, splash.raise_)
+        QTimer.singleShot(120, splash.raise_)
+
+        def focus_pet_after_splash(_result=None):
+            pet.raise_()
+            pet.setFocus()
+            pet.activateWindow()
+            pet.idle_scheduler_suspended = False
+            pet.idle_scheduler_ready_at = time.monotonic() + 30.0
+            if bool(getattr(pet, "_first_contact_greeting_after_startup", False)):
+                pet._first_contact_greeting_after_startup = False
+                QTimer.singleShot(1200, pet.play_first_contact_greeting)
+
+        splash.finished.connect(focus_pet_after_splash)
         print_runtime_help(pet)
         QTimer.singleShot(0, start_asr_preload)
 

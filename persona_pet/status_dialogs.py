@@ -701,11 +701,11 @@ class DriveStatusDialog(QDialog):
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(9)
 
-        title = QLabel("苏念 STATUS")
+        title = QLabel("角色 STATUS")
         title.setObjectName("statusTitle")
         root.addWidget(title)
 
-        subtitle = QLabel("内驱 / 记忆 / 身体 / 生理周期")
+        subtitle = QLabel("内驱 / 记忆 / 身体 / 身体节律")
         subtitle.setObjectName("statusSubtitle")
         root.addWidget(subtitle)
 
@@ -735,7 +735,7 @@ class DriveStatusDialog(QDialog):
         bottom_row.setSpacing(10)
         root.addLayout(bottom_row, 1)
 
-        cycle_panel, cycle_layout = self._make_panel("生理周期 / 亲密需求")
+        cycle_panel, cycle_layout = self._make_panel("身体节律 / 亲近需求")
         self.cycle_label = QLabel("")
         self.cycle_label.setStyleSheet("color: #684158; font: 9pt 'Microsoft YaHei UI';")
         self.cycle_label.setWordWrap(True)
@@ -747,7 +747,7 @@ class DriveStatusDialog(QDialog):
         self.intimacy_bar.setStyleSheet("QProgressBar::chunk { background: #e86fa6; }")
         intimacy_row = QHBoxLayout()
         intimacy_row.setSpacing(8)
-        self.intimacy_label = QLabel("亲密需求")
+        self.intimacy_label = QLabel("亲近需求")
         self.intimacy_label.setFixedWidth(76)
         self.intimacy_label.setStyleSheet("font: bold 9pt 'Microsoft YaHei UI'; color: #5d3750;")
         self.intimacy_value_label = QLabel("0")
@@ -837,10 +837,10 @@ class DriveStatusDialog(QDialog):
         legend = QHBoxLayout()
         legend.setSpacing(8)
         for phase, text in (
-            ("menstrual", "经期"),
-            ("follicular", "卵泡期"),
-            ("ovulation", "排卵期"),
-            ("luteal", "黄体期"),
+            ("menstrual", "月影期"),
+            ("follicular", "新芽期"),
+            ("ovulation", "花信期"),
+            ("luteal", "微澜期"),
         ):
             swatch = QLabel("")
             swatch.setFixedSize(12, 12)
@@ -859,14 +859,14 @@ class DriveStatusDialog(QDialog):
         row = QHBoxLayout()
         row.setSpacing(6)
         for text, phase in (
-            ("测经期", "menstrual"),
-            ("测卵泡", "follicular"),
-            ("测排卵", "ovulation"),
-            ("测黄体", "luteal"),
+            ("测月影", "menstrual"),
+            ("测新芽", "follicular"),
+            ("测花信", "ovulation"),
+            ("测微澜", "luteal"),
         ):
             btn = QPushButton(text)
             btn.setFixedHeight(24)
-            btn.setToolTip("测试用：临时把今天切到这个生理阶段，方便检查对话。")
+            btn.setToolTip("测试用：临时把今天切到这个身体节律阶段，方便检查对话。")
             btn.clicked.connect(lambda checked=False, p=phase: self._set_cycle_phase_for_testing(p))
             row.addWidget(btn, 1)
         return row
@@ -929,7 +929,7 @@ class DriveStatusDialog(QDialog):
                 status_text = f"{sexual.get('label', '')} {level}"
                 self.intimacy_value_label.setText(status_text)
                 self.intimacy_value_label.setToolTip(status_text)
-                self.growth_label.setText(f"当前亲密需求增长速度：x{sexual.get('growth_multiplier', 1.0):.1f}；深色边框是今天。")
+                self.growth_label.setText(f"当前亲近需求变化速度：x{sexual.get('growth_multiplier', 1.0):.1f}；深色边框是今天。")
                 calendar_items = self.body_cycle.build_cycle_calendar()
                 for index, item in enumerate(calendar_items):
                     if index >= len(self.cycle_cells):
@@ -940,7 +940,7 @@ class DriveStatusDialog(QDialog):
                     text = f">{item.get('day')}" if current else str(item.get("day"))
                     cell.setText(text)
                     cell.setToolTip(
-                        f"第 {item.get('day')} 天：{item.get('label')}，亲密需求增长 x{item.get('growth_multiplier', 1.0):.1f}"
+                        f"第 {item.get('day')} 天：{item.get('label')}，亲近需求变化 x{item.get('growth_multiplier', 1.0):.1f}"
                     )
                     self._style_cycle_cell(cell, item.get("phase", ""), current=current)
                 for cell in self.cycle_cells[len(calendar_items):]:

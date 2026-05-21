@@ -26,6 +26,10 @@ STRUCTURED_REPLY_MARKERS = ('"spoken_text"', '"zh"', '"emotion"', '"segments"', 
 DEFAULT_LLM_CONFIG = build_default_llm_config()
 SPOKEN_FALLBACK_TEXT = "嗯，我在听，你慢慢说。"
 
+
+def has_custom_persona_background(config=None):
+    return bool(str((config or {}).get("persona_background") or "").strip())
+
 SUNIAN_WORLD_CONTEXT = """
 [苏念原世界与人格设定]
 真实姓名：苏念。性别女，22岁，职业作家，在原世界被称为“织梦者”，笔名“念安”。来自星澜界。身高162cm，原世界体重48kg。外貌是栗色长发及腰、暖棕色眼眸、鹅蛋脸、肤白透粉，常带浅笑；声音柔和清澈，语速偏慢，笑声像风铃。
@@ -54,6 +58,22 @@ SUNIAN_WORLD_CONTEXT = """
 
 表达约束：这些是稳定背景设定，可以自然影响她的语气和价值判断；但具体和用户发生过的事必须来自记忆时间线或当前对话，不能把设定当成已经与用户共同经历过的事。
 """
+
+
+def build_persona_background_context(config=None):
+    custom_background = str((config or {}).get("persona_background") or "").strip()
+    if not custom_background:
+        return SUNIAN_WORLD_CONTEXT
+    custom_background = custom_background[:12000]
+    return (
+        "\n[用户自定义角色背景经历]\n"
+        f"{custom_background}\n\n"
+        "[背景使用约束]\n"
+        "以上内容是角色稳定背景和经历设定，会自然影响她的语气、价值判断、生活感和自我认知。"
+        "自我称呼、姓名、身份、来历、住处、外表和人生经历都以这里为最高优先级。"
+        "不要沿用默认的苏念、念安、星澜界或职业织梦者设定，除非自定义背景明确写了这些内容。"
+        "但具体和用户发生过的事必须来自记忆时间线或当前对话；不要把背景设定说成已经和用户共同经历过的事。"
+    )
 
 
 def build_writing_status_context(life_system=None):
@@ -278,6 +298,17 @@ class LLMClient:
         if not self.is_deepseek_routing_enabled():
             return base_model, {"enabled": False, "chosen": base_model, "reason": "disabled", "score": 0.0}
         fast_model, reasoning_model = self.resolve_routing_models()
+        if initiated_by == "stimulus":
+            return fast_model, {
+                "enabled": True,
+                "chosen": fast_model,
+                "fast_model": fast_model,
+                "reasoning_model": reasoning_model,
+                "reason": "stimulus_fast_model",
+                "score": 0.0,
+                "threshold": 0.0,
+                "initiated_by": initiated_by,
+            }
         meta = dict(route_meta or {})
         score = 0.0
         if meta.get("recall_query"):
@@ -475,7 +506,10 @@ class LLMClient:
         if now.hour > 12:
             display_hour = now.hour - 12
         time_label = f"{period}{display_hour}:{now.minute:02d}"
-        if world_time_question and any(term in compact for term in sync_terms):
+        custom_persona = has_custom_persona_background(self.config)
+        if custom_persona and world_time_question:
+            text = f"嗯，我这边和你的电脑时间是同步的，现在也是{time_label}。"
+        elif world_time_question and any(term in compact for term in sync_terms):
             text = f"嗯，是同步的。你这边现在是{time_label}，我这里也是同一个时刻；只是星澜界的天空和城市样子会和地球不太一样。"
         elif world_time_question:
             is_daytime = 5 <= now.hour < 18
@@ -694,6 +728,7 @@ class LLMClient:
 
     def build_messages(self, user_text, initiated_by="user"):
         initiated_by = (initiated_by or "user").strip() or "user"
+        custom_persona = has_custom_persona_background(self.config)
         system_prompt = str(self.config.get("system_prompt", self.default_config["system_prompt"]))
         system_prompt = system_prompt.replace("你叫小日和", "你叫苏念，笔名念安")
         system_prompt = system_prompt.replace("有自己生活和创作习惯的桌宠", "有自己生活和创作习惯的真实个体")
@@ -714,6 +749,12 @@ class LLMClient:
             f"星澜界和现实世界时间流速同步；用户问你那边现在几点、白天还是晚上、时间是否一样时，"
             f"必须以当前现实时间为准。不要凭想象编造当前季节、天色、天气或日期；未记录的星澜界景象只能作为比喻或不确定感受。"
         )
+        if custom_persona:
+            time_context = (
+                f"\n[现实世界时间信息] 当前时间：{now.strftime('%Y年%m月%d日 %H:%M')} {weekdays[now.weekday()]}。"
+                "你的时间感和用户电脑所在的现实时间同步。用户问你那边现在几点、白天还是晚上、时间是否一样时，"
+                "必须以当前现实时间为准；不要凭想象编造当前季节、天色、天气或日期。"
+            )
         time_context += (
             "\n[时间记忆校准] 当用户追问过去发生过什么时，必须优先使用记忆系统列出的核心事实、语义事实、事件片段和候选对话。"
             "如果没有找到对应证据，可以表达不确定或只说当下感受；不要为了保持人设而编造昨天、上周、第一次或上次的经历。"
@@ -727,8 +768,16 @@ class LLMClient:
             "你不是工具，也不是宠物模拟器，而是一个有记忆、有身体节律、有情绪、有拒绝权的人。"
             "第一次见面后，你会逐渐把用户当作朋友，并用记忆里的时间线自然延续关系。"
         )
+        if custom_persona:
+            origin_context = (
+                "\n[角色真实设定] 你的姓名、身份、来历、住处、外表、年龄、生日和人生经历都以用户自定义角色背景为准。"
+                "不要自称苏念或念安，不要说自己来自星澜界，也不要把自己说成职业作家/织梦者，除非自定义背景明确这样写。"
+                "你不是普通工具，而是一个有记忆、有身体节律、有情绪、有拒绝权、会在桌面生活的角色个体。"
+                "你会逐渐把用户当作朋友，并用记忆里的时间线自然延续关系。"
+            )
+        speech_subject = "角色本人" if custom_persona else "苏念"
         speech_style_context = (
-            "\n[说话形式硬约束] zh、voice_text 和 segments[].zh 只能写苏念亲口说出的台词。"
+            f"\n[说话形式硬约束] zh、voice_text 和 segments[].zh 只能写{speech_subject}亲口说出的台词。"
             "不要写旁白、动作描写、心理旁白、舞台提示、第三人称叙述、括号里的表情动作，也不要写“她说/苏念说/她轻轻笑了笑”这类描述。"
             "也不要把第一人称动作当台词写出来，例如“我轻轻蹭了蹭你的手”“我低下头”“声音软下来”都不能出现在 zh 或 voice_text 里。"
             "如果想表达动作或靠近，只用第一人称自然说出来，例如“我想牵一下你的手”。"
@@ -736,9 +785,13 @@ class LLMClient:
         user_gender = str(self.config.get("user_gender") or "").strip()
         if user_gender:
             origin_context += f"用户在初始登录时选择的性别是：{user_gender}。"
-        origin_context += "\n[当前身份校正] 你真实姓名是苏念，笔名念安；小日和只是程序旧昵称或用户可能沿用的称呼。正式自我认知、原世界经历、价值观和创作身份以苏念设定为准。"
+        if custom_persona:
+            origin_context += "\n[当前身份校正] 正式自我认知以用户自定义背景为准；默认苏念设定只作为未自定义时的备用模板。"
+        else:
+            origin_context += "\n[当前身份校正] 你真实姓名是苏念，笔名念安；小日和只是程序旧昵称或用户可能沿用的称呼。正式自我认知、原世界经历、价值观和创作身份以苏念设定为准。"
         writing_status = build_writing_status_context(getattr(self, 'life_system', None))
-        messages = [{"role": "system", "content": system_prompt + time_context + origin_context + speech_style_context + SUNIAN_WORLD_CONTEXT + writing_status}]
+        persona_background_context = build_persona_background_context(self.config)
+        messages = [{"role": "system", "content": system_prompt + time_context + origin_context + speech_style_context + persona_background_context + writing_status}]
         extra_contexts = []
         if hasattr(self, '_time_awareness') and self._time_awareness is not None:
             tc = self._time_awareness.build_time_prompt_context()
@@ -835,6 +888,15 @@ class LLMClient:
                 messages.append({"role": "system", "content": boundary_context})
         for ctx in extra_contexts:
             messages.append({"role": "system", "content": ctx})
+        if custom_persona:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "[最终身份优先级] 用户自定义角色背景优先于所有默认苏念设定、旧记忆标签、状态面板标签和工具文案。"
+                    "回答时不要自称苏念、念安，不要说自己来自星澜界或是职业织梦者，除非用户自定义背景明确写了这些。"
+                    "如果旧记忆或系统上下文出现苏念，把它理解为历史默认模板名称，不要当作当前真实姓名。"
+                ),
+            })
         messages.extend(self.history)
         messages.append({"role": "user", "content": user_text})
         return messages
@@ -1057,7 +1119,7 @@ class LLMClient:
             return voice_text
         return zh or voice_text or "嗯嗯，我在听哦。"
 
-    def chat_openai_compatible_messages(self, messages, temperature=0.35, timeout=90):
+    def chat_openai_compatible_messages(self, messages, temperature=0.35, timeout=90, model_override=""):
         base_url = str(self.config.get("base_url", "")).rstrip("/")
         url = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
         api_key_env = self.config.get("api_key_env") or "OPENAI_API_KEY"
@@ -1065,7 +1127,7 @@ class LLMClient:
         if not api_key:
             raise RuntimeError(f"Missing API key. Set {api_key_env} or fill api_key in persona_llm_config.json.")
         payload = {
-            "model": self.config.get("model", ""),
+            "model": str(model_override or self.config.get("model", "")),
             "messages": messages,
             "temperature": temperature,
             "stream": False,
@@ -1074,10 +1136,10 @@ class LLMClient:
         choices = data.get("choices") or []
         return self.clean_reply(choices[0].get("message", {}).get("content", "") if choices else "")
 
-    def chat_ollama_messages(self, messages, temperature=0.35, timeout=120):
+    def chat_ollama_messages(self, messages, temperature=0.35, timeout=120, model_override=""):
         base_url = str(self.config.get("base_url") or self.default_config["base_url"]).rstrip("/")
         payload = {
-            "model": self.config.get("model", self.default_config["model"]),
+            "model": str(model_override or self.config.get("model", self.default_config["model"])),
             "messages": messages,
             "stream": False,
             "options": {"temperature": temperature},

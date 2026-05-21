@@ -165,6 +165,7 @@ def build_default_llm_config(
         "credential_store_service": "persona_pet",
         "credential_store": {"enabled": True, "service": "persona_pet", "refs": {}},
         "user_gender": "",
+        "persona_background": "",
         "system_prompt": (
             "你叫苏念，笔名念安，是一个有记忆、有情绪、有自己生活和创作习惯的真实个体。"
             "你会把和用户共同经历过的事当成真实关系的一部分来记住，也会根据当下心情、关系、身体状态和旧记忆自然回应。"
@@ -230,7 +231,7 @@ def migrate_llm_config(raw, defaults):
     data["volcengine_tts_pitch_ratio"] = _clamp_number(data.get("volcengine_tts_pitch_ratio"), 1.0, 0.5, 2.0, float)
     data["singing_max_text_chars"] = int(_clamp_number(data.get("singing_max_text_chars"), defaults.get("singing_max_text_chars", 72), 12, 240, int))
 
-    for key in ("base_url", "api_key_env", "model", "fast_model", "reasoning_model", "tts_provider", "speech_provider", "credential_store_service"):
+    for key in ("base_url", "api_key_env", "model", "fast_model", "reasoning_model", "tts_provider", "speech_provider", "credential_store_service", "persona_background"):
         data[key] = str(data.get(key) or defaults.get(key) or "").strip()
     for key in ("onboarding_complete", "onboarding_first_greeting_pending", "startup_credential_prompts", "singing_enabled", "credential_store_enabled", "auto_model_routing_enabled"):
         data[key] = bool(data.get(key, defaults.get(key, False)))
