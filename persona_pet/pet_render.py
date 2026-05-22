@@ -810,7 +810,7 @@ class PetRenderMixin:
             zone=zone,
             source="mouse",
             memory_worthy=True,
-            should_talk=count <= 3,
+            should_talk=True,
             cooldown_key="touch",
             meta={
                 "zone": zone,
