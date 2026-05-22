@@ -5,7 +5,7 @@ import time
 
 
 class MouseTracker:
-    def __init__(self, gaze_radius_px=500, stare_threshold_sec=3.0, movement_threshold_px=5.0):
+    def __init__(self, gaze_radius_px=500, stare_threshold_sec=15.0, movement_threshold_px=5.0):
         self.gaze_radius_px = float(gaze_radius_px)
         self.stare_threshold_sec = float(stare_threshold_sec)
         self.movement_threshold_px = float(movement_threshold_px)

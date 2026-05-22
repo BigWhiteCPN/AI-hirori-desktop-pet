@@ -13,6 +13,7 @@ CITY_LOCATIONS = [
         "id": "supermarket",
         "name": "超市",
         "icon": "\U0001f6d2",
+        "icon_asset": "icons/supermarket.png",
         "x": 0.08, "y": 0.22,
         "w": 0.18, "h": 0.20,
         "color": QColor(255, 200, 60),
@@ -22,6 +23,7 @@ CITY_LOCATIONS = [
         "id": "farm",
         "name": "农场",
         "icon": "\U0001f33e",
+        "icon_asset": "icons/farm.png",
         "x": 0.38, "y": 0.50,
         "w": 0.20, "h": 0.22,
         "color": QColor(120, 200, 100),
@@ -31,6 +33,7 @@ CITY_LOCATIONS = [
         "id": "home",
         "name": "小屋",
         "icon": "\U0001f3e0",
+        "icon_asset": "icons/home.png",
         "x": 0.72, "y": 0.18,
         "w": 0.20, "h": 0.22,
         "color": QColor(255, 170, 180),
@@ -40,6 +43,7 @@ CITY_LOCATIONS = [
         "id": "factory",
         "name": "工业区",
         "icon": "\U0001f3ed",
+        "icon_asset": "icons/factory.png",
         "x": 0.08, "y": 0.60,
         "w": 0.18, "h": 0.20,
         "color": QColor(160, 170, 200),
@@ -49,6 +53,7 @@ CITY_LOCATIONS = [
         "id": "city_hall",
         "name": "市政厅",
         "icon": "\U0001f3db",
+        "icon_asset": "icons/city_hall.png",
         "x": 0.72, "y": 0.56,
         "w": 0.20, "h": 0.22,
         "color": QColor(200, 180, 240),
@@ -100,6 +105,37 @@ class CityModeMixin:
         pixmap = QPixmap(path)
         self._city_background_pixmap = pixmap
         return pixmap if not pixmap.isNull() else None
+
+    def city_location_pixmap(self, loc):
+        asset = loc.get("icon_asset")
+        if not asset:
+            return None
+        cache = getattr(self, "_city_location_pixmaps", None)
+        if cache is None:
+            cache = {}
+            self._city_location_pixmaps = cache
+        pixmap = cache.get(asset)
+        if pixmap is not None:
+            return pixmap if not pixmap.isNull() else None
+        base_dir = getattr(self, "base_dir", None)
+        if not base_dir:
+            cache[asset] = QPixmap()
+            return None
+        relative_asset = asset.replace("/", os.sep)
+        path = os.path.join(base_dir, "assets", "city_map", relative_asset)
+        pixmap = QPixmap(path)
+        cache[asset] = pixmap
+        return pixmap if not pixmap.isNull() else None
+
+    def draw_city_icon_pixmap(self, painter, pixmap, rect):
+        icon_path = QPainterPath()
+        icon_path.addRoundedRect(rect, 10, 10)
+        painter.save()
+        painter.setClipPath(icon_path)
+        painter.drawPixmap(rect, pixmap, QRectF(pixmap.rect()))
+        painter.restore()
+        painter.setPen(QPen(QColor(255, 255, 255, 190), 1))
+        painter.drawPath(icon_path)
 
     def draw_city_scene(self):
         painter = QPainter(self)
@@ -192,12 +228,22 @@ class CityModeMixin:
             painter.setPen(QPen(border_color, border_width))
             painter.drawPath(path)
 
-            # Icon
-            icon_font = QFont("Segoe UI Emoji", 28 if is_hover else 24)
-            painter.setFont(icon_font)
-            painter.setPen(QColor(255, 255, 255))
-            icon_rect = QRectF(rect.left(), rect.top() + 8, rect.width(), rect.height() * 0.5)
-            painter.drawText(icon_rect, Qt.AlignCenter, loc.get("icon", ""))
+            # Icon image, with the old emoji kept as a fallback if the asset is missing.
+            icon_size = min(rect.width() - 24, rect.height() * (0.62 if is_hover else 0.58))
+            icon_rect = QRectF(
+                rect.center().x() - icon_size / 2,
+                rect.top() + 8,
+                icon_size,
+                icon_size,
+            )
+            icon_pixmap = self.city_location_pixmap(loc)
+            if icon_pixmap is not None:
+                self.draw_city_icon_pixmap(painter, icon_pixmap, icon_rect)
+            else:
+                icon_font = QFont("Segoe UI Emoji", 28 if is_hover else 24)
+                painter.setFont(icon_font)
+                painter.setPen(QColor(255, 255, 255))
+                painter.drawText(icon_rect, Qt.AlignCenter, loc.get("icon", ""))
 
             # Name
             name_font = QFont("Microsoft YaHei UI", 11 if is_hover else 10, QFont.Bold)

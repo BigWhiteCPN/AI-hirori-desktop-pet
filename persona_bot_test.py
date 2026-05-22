@@ -959,7 +959,7 @@ class Live2DDesktopPet(
         self.stimulus_dispatcher = StimulusDispatcher(self, logger=log_runtime)
         self.mouse_tracker = MouseTracker(
             gaze_radius_px=float(self.llm_config.get("interaction_gaze_radius_px", 500) or 500),
-            stare_threshold_sec=float(self.llm_config.get("interaction_stare_threshold_sec", 3.0) or 3.0),
+            stare_threshold_sec=float(self.llm_config.get("interaction_stare_threshold_sec", 15.0) or 15.0),
         )
         self._touch_visual = TouchVisual()
         self.activity_monitor = None
