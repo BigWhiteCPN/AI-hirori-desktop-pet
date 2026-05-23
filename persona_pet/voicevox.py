@@ -18,7 +18,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from persona_pet.error_reporter import report_exception
-from persona_pet.llm_config import resolve_project_path
+from persona_pet.llm_config import DEFAULT_QWEN_TTS_MODEL_ID, resolve_project_path
 from persona_pet.memory import compact_text, contains_any, normalize_prosody_hint, strip_stage_directions
 from persona_pet.runtime import get_default_runtime
 from persona_pet.behavior import (
@@ -544,6 +544,8 @@ class VoicevoxController:
                 seed=int(self.config.get("qwen_tts_seed", 24681357) or 24681357),
                 temperature=float(self.config.get("qwen_tts_temperature", 0.55) or 0.55),
                 top_p=float(self.config.get("qwen_tts_top_p", 0.85) or 0.85),
+                model_id=str(self.config.get("qwen_tts_model_id") or DEFAULT_QWEN_TTS_MODEL_ID),
+                auto_download=config_bool(self.config, "qwen_tts_auto_download", True),
                 runtime=self.runtime,
             )
             engine.load_model_async()
@@ -558,6 +560,8 @@ class VoicevoxController:
                 seed=int(self.config.get("qwen_tts_seed", 24681357) or 24681357),
                 temperature=float(self.config.get("qwen_tts_temperature", 0.55) or 0.55),
                 top_p=float(self.config.get("qwen_tts_top_p", 0.85) or 0.85),
+                model_id=str(self.config.get("qwen_tts_model_id") or DEFAULT_QWEN_TTS_MODEL_ID),
+                auto_download=config_bool(self.config, "qwen_tts_auto_download", True),
             )
         self.qwen_engine = engine
         return engine

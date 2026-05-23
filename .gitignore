@@ -35,6 +35,14 @@ dist_fixed/
 # Large local third-party engines/models
 third_party/
 
+# Bundled default QwenTTS voice reference for first-run local TTS.
+!third_party/
+third_party/*
+!third_party/qwen_tts_refs/
+third_party/qwen_tts_refs/*
+!third_party/qwen_tts_refs/reference.wav
+!third_party/qwen_tts_refs/reference.txt
+
 # Local editor/OS files
 .idea/
 .vscode/

@@ -146,17 +146,25 @@ Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
 - 远程模型 ID：`Qwen/Qwen3-TTS-12Hz-1.7B-Base`
 - 项目内相对路径：`third_party/qwen_tts_model`
 
+如果 `tts_provider = "local"` 且 `qwen_tts_auto_download = true`，程序会在首次启动时检测
+`third_party/qwen_tts_model`。目录里没有完整模型时，会自动把
+`qwen_tts_model_id` 指定的模型下载到这个目录。
+
 如果你使用项目内默认目录，下面这些字段都可以写相对路径：
 
 - `qwen_tts_model_path`
+- `qwen_tts_model_id`
 - `qwen_tts_ref_dir`
 - `qwen_tts_ref_audio`
 - `qwen_tts_ref_text`
 
 默认参考文件位置：
 
-- `third_party/qwen_tts_refs/neutral.wav`
-- `third_party/qwen_tts_refs/neutral.txt`
+- `third_party/qwen_tts_refs/reference.wav`
+- `third_party/qwen_tts_refs/reference.txt`
+
+仓库已经内置一份默认参考音频。想换成自己的声音时，替换这两个文件或在配置里改
+`qwen_tts_ref_audio` / `qwen_tts_ref_text`。
 
 本地 TTS 不是零门槛 CPU 模式。通常至少需要：
 

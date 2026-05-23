@@ -51,8 +51,8 @@ Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
 - 本地大模型：安装 Ollama 后，在首次登录选择“本地 Qwen3 4B Instruct（Ollama）”；默认模型 `qwen3:4b-instruct`，模型目录 `third_party/ollama_models`
 - 云端语音合成：设置 `VOLCENGINE_TTS_API_KEY`
 - 本地 TTS：把 `tts_provider` 改成 `local`，并安装 `requirements_local_tts.txt`
-- 默认本地 TTS 模型目录：`third_party/qwen_tts_model/`
-- 默认参考音频和文本：`third_party/qwen_tts_refs/neutral.wav`、`third_party/qwen_tts_refs/neutral.txt`
+- 默认本地 TTS 模型目录：`third_party/qwen_tts_model/`；首次启用时会自动下载 `qwen_tts_model_id`
+- 默认参考音频和文本：`third_party/qwen_tts_refs/reference.wav`、`third_party/qwen_tts_refs/reference.txt`
 - 默认语音识别是 `speech_provider = "doubao"`
 - 如果改成 `speech_provider = "local"`，还需要安装 `requirements_local_asr.txt`
 

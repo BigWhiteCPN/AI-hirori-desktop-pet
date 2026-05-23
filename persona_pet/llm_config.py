@@ -17,6 +17,7 @@ DEFAULT_LOCAL_LLM_PROVIDER = "ollama"
 DEFAULT_LOCAL_LLM_MODEL = "qwen3:4b-instruct"
 DEFAULT_LOCAL_LLM_BASE_URL = "http://127.0.0.1:11435"
 DEFAULT_LOCAL_LLM_MODELS_DIR = "third_party/ollama_models"
+DEFAULT_QWEN_TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 THINKING_LOCAL_LLM_MODELS = {
     "qwen3:4b",
     "qwen3:4b-thinking",
@@ -172,14 +173,17 @@ def build_default_llm_config(
         "singing_external_command": singing_external_command,
         "singing_max_text_chars": singing_max_text_chars,
         "qwen_tts_model_path": "",
+        "qwen_tts_model_id": DEFAULT_QWEN_TTS_MODEL_ID,
+        "qwen_tts_auto_download": True,
         "qwen_tts_ref_dir": "",
-        "qwen_tts_ref_audio": "",
-        "qwen_tts_ref_text": "",
+        "qwen_tts_ref_audio": "third_party/qwen_tts_refs/reference.wav",
+        "qwen_tts_ref_text": "third_party/qwen_tts_refs/reference.txt",
         "qwen_tts_xvec_only": False,
         "qwen_tts_do_sample": False,
         "qwen_tts_seed": 24681357,
         "qwen_tts_temperature": 0.55,
         "qwen_tts_top_p": 0.85,
+        "qwen_tts_stream_chunk_size": 12,
         "qwen_tts_emotion": "neutral",
         "godot_project_dir": "",
         "godot_executable": "",
@@ -276,6 +280,7 @@ def migrate_llm_config(raw, defaults):
     data["volcengine_tts_volume_ratio"] = _clamp_number(data.get("volcengine_tts_volume_ratio"), 1.0, 0.2, 2.0, float)
     data["volcengine_tts_pitch_ratio"] = _clamp_number(data.get("volcengine_tts_pitch_ratio"), 1.0, 0.5, 2.0, float)
     data["singing_max_text_chars"] = int(_clamp_number(data.get("singing_max_text_chars"), defaults.get("singing_max_text_chars", 72), 12, 240, int))
+    data["qwen_tts_stream_chunk_size"] = int(_clamp_number(data.get("qwen_tts_stream_chunk_size"), defaults.get("qwen_tts_stream_chunk_size", 12), 4, 32, int))
 
     for key in (
         "base_url",
@@ -287,13 +292,14 @@ def migrate_llm_config(raw, defaults):
         "local_llm_model",
         "local_llm_base_url",
         "local_llm_models_dir",
+        "qwen_tts_model_id",
         "tts_provider",
         "speech_provider",
         "credential_store_service",
         "persona_background",
     ):
         data[key] = str(data.get(key) or defaults.get(key) or "").strip()
-    for key in ("onboarding_complete", "onboarding_first_greeting_pending", "startup_credential_prompts", "singing_enabled", "credential_store_enabled", "auto_model_routing_enabled", "local_llm_auto_pull"):
+    for key in ("onboarding_complete", "onboarding_first_greeting_pending", "startup_credential_prompts", "singing_enabled", "credential_store_enabled", "auto_model_routing_enabled", "local_llm_auto_pull", "qwen_tts_auto_download"):
         data[key] = bool(data.get(key, defaults.get(key, False)))
     if not isinstance(data.get("credential_store"), dict):
         data["credential_store"] = {"enabled": data["credential_store_enabled"], "service": data["credential_store_service"], "refs": {}}

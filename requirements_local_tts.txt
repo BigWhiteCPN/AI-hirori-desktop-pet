@@ -1,1 +1,2 @@
 faster-qwen3-tts
+huggingface_hub

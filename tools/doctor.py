@@ -49,6 +49,7 @@ OPTIONAL_MODULES = (
 LOCAL_TTS_MODULES = (
     ("torch", "PyTorch for local TTS"),
     ("transformers", "transformers for local TTS"),
+    ("huggingface_hub", "model download helper for local TTS"),
     ("faster_qwen3_tts", "faster-qwen3-tts runtime"),
 )
 
@@ -63,6 +64,7 @@ OPTIONAL_HINTS = {
     "pytesseract": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_ocr.txt",
     "keyring": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_desktop_optional.txt",
     "sentence_transformers": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_memory.txt",
+    "huggingface_hub": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_local_tts.txt",
     "faster_qwen3_tts": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_local_tts.txt",
     "funasr": "Install with: .\\.venv\\Scripts\\python.exe -m pip install -r .\\requirements_local_asr.txt",
 }

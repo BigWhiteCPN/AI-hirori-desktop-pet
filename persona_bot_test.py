@@ -61,6 +61,7 @@ from persona_pet.heart import HeartMixin
 from persona_pet.library_dialogs import LifeLibraryDialog
 from persona_pet.llm_config import (
     DEFAULT_LOCAL_LLM_BASE_URL,
+    DEFAULT_QWEN_TTS_MODEL_ID,
     build_default_llm_config,
     load_llm_config_file,
     resolve_project_path,
@@ -266,6 +267,67 @@ def prepare_local_llm_if_needed(config, parent=None):
             parent,
             "本地模型下载失败",
             f"下载 {model} 失败：{exc}\n可以手动运行 ollama pull {model} 后再启动。",
+            icon=QMessageBox.Warning,
+        )
+        return False
+    progress.close()
+    return True
+
+
+def prepare_local_tts_model_if_needed(config, parent=None):
+    if str((config or {}).get("tts_provider") or "").strip().lower() != "local":
+        return True
+    try:
+        import faster_qwen3_tts  # noqa: F401
+        from persona_pet.qwen_tts_engine import download_qwen_tts_model, qwen_tts_model_ready
+    except ImportError as exc:
+        show_startup_message(
+            parent,
+            "本地 TTS 依赖缺失",
+            f"当前选择了本地 QwenTTS，但缺少依赖：{exc}\n请先安装 requirements_local_tts.txt。",
+            icon=QMessageBox.Warning,
+        )
+        return False
+
+    model_path = resolve_project_path(BASE_DIR, (config or {}).get("qwen_tts_model_path"))
+    if not model_path:
+        model_path = os.path.join(BASE_DIR, "third_party", "qwen_tts_model")
+    if qwen_tts_model_ready(model_path):
+        return True
+
+    if not config_bool(config, "qwen_tts_auto_download", True):
+        show_startup_message(
+            parent,
+            "本地 TTS 模型未下载",
+            f"没有检测到 QwenTTS 模型。\n请下载到：{model_path}\n或在设置里开启自动下载。",
+            icon=QMessageBox.Warning,
+        )
+        return False
+
+    model_id = str((config or {}).get("qwen_tts_model_id") or DEFAULT_QWEN_TTS_MODEL_ID).strip() or DEFAULT_QWEN_TTS_MODEL_ID
+    progress = QProgressDialog(parent)
+    progress.setWindowTitle("下载本地 TTS 模型")
+    progress.setLabelText(f"正在下载 {model_id} 到项目模型目录...\n{model_path}")
+    progress.setCancelButton(None)
+    progress.setRange(0, 0)
+    progress.setMinimumWidth(560)
+    progress.setWindowModality(Qt.ApplicationModal)
+    progress.show()
+    QApplication.processEvents()
+
+    def update_progress(line):
+        display = str(line or "正在下载...")[-180:]
+        progress.setLabelText(f"正在下载 {model_id} 到项目模型目录...\n{display}")
+        QApplication.processEvents()
+
+    try:
+        download_qwen_tts_model(model_id, model_path, progress_callback=update_progress)
+    except Exception as exc:
+        progress.close()
+        show_startup_message(
+            parent,
+            "本地 TTS 模型下载失败",
+            f"下载 {model_id} 失败：{exc}\n可以手动下载后放到：{model_path}",
             icon=QMessageBox.Warning,
         )
         return False
@@ -2529,6 +2591,12 @@ def main():
             try:
                 from persona_pet.qwen_tts_engine import QwenTTSEngine
 
+                if not prepare_local_tts_model_if_needed(llm_config):
+                    llm_config["tts_provider"] = "volcengine"
+                    startup_state["wait_for_local_tts"] = False
+                    splash.mark_voice_ready(False)
+                    QTimer.singleShot(0, create_pet_window)
+                    return
                 startup_state["local_tts_engine"] = QwenTTSEngine(
                     model_path=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_model_path")),
                     ref_dir=resolve_project_path(BASE_DIR, llm_config.get("qwen_tts_ref_dir")),
@@ -2539,6 +2607,8 @@ def main():
                     seed=int(llm_config.get("qwen_tts_seed", 24681357) or 24681357),
                     temperature=float(llm_config.get("qwen_tts_temperature", 0.55) or 0.55),
                     top_p=float(llm_config.get("qwen_tts_top_p", 0.85) or 0.85),
+                    model_id=str(llm_config.get("qwen_tts_model_id") or DEFAULT_QWEN_TTS_MODEL_ID),
+                    auto_download=config_bool(llm_config, "qwen_tts_auto_download", True),
                 )
                 startup_state["local_tts_engine"].load_model_async()
                 print("本地 TTS 模型正在后台加载...")
@@ -2567,6 +2637,8 @@ def main():
                 seed=int(llm_config.get("qwen_tts_seed", 24681357) or 24681357),
                 temperature=float(llm_config.get("qwen_tts_temperature", 0.55) or 0.55),
                 top_p=float(llm_config.get("qwen_tts_top_p", 0.85) or 0.85),
+                model_id=str(llm_config.get("qwen_tts_model_id") or DEFAULT_QWEN_TTS_MODEL_ID),
+                auto_download=config_bool(llm_config, "qwen_tts_auto_download", True),
             )
             local_tts_engine.load_model_async()
             print("本地 TTS 模型正在后台加载...")

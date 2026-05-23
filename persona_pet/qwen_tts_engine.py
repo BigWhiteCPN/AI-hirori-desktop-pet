@@ -33,8 +33,10 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Default paths (relative to project root)
 _DEFAULT_MODEL_PATH = os.path.join(_PROJECT_ROOT, "third_party", "qwen_tts_model")
 _DEFAULT_REF_DIR = os.path.join(_PROJECT_ROOT, "third_party", "qwen_tts_refs")
-_DEFAULT_REF_AUDIO = os.path.join(_DEFAULT_REF_DIR, "neutral.wav")
+_DEFAULT_REF_AUDIO = os.path.join(_DEFAULT_REF_DIR, "reference.wav")
+DEFAULT_QWEN_TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 _SINGLE_REF_CANDIDATES = ("reference", "ref", "speaker", "neutral")
+_MODEL_WEIGHT_SUFFIXES = (".safetensors", ".bin")
 
 DEFAULT_SAMPLE_RATE = 24000
 TARGET_PEAK = 0.86
@@ -49,6 +51,67 @@ STREAM_STABILIZE_MAX_STEP = 0.035
 
 def _runtime_log(msg: str) -> None:
     print(f"[QwenTTS] {msg}", flush=True)
+
+
+def _looks_like_remote_model_id(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text or text.startswith(("http://", "https://", "./", ".\\", "../", "..\\", "~")):
+        return False
+    if os.path.isabs(text) or "\\" in text:
+        return False
+    normalized = text.replace("\\", "/")
+    first = normalized.split("/", 1)[0].strip().lower()
+    if first in {"third_party", "assets", "models", "model", "persona_pet", "tools"}:
+        return False
+    return normalized.count("/") == 1
+
+
+def qwen_tts_model_ready(model_path: str) -> bool:
+    path = str(model_path or "").strip()
+    if not path:
+        path = _DEFAULT_MODEL_PATH
+    if _looks_like_remote_model_id(path):
+        return True
+    if not os.path.isdir(path):
+        return False
+    if not os.path.isfile(os.path.join(path, "config.json")):
+        return False
+    for name in os.listdir(path):
+        if name.lower().endswith(_MODEL_WEIGHT_SUFFIXES):
+            return True
+    return False
+
+
+def download_qwen_tts_model(
+    model_id: str = DEFAULT_QWEN_TTS_MODEL_ID,
+    target_dir: str = "",
+    progress_callback=None,
+) -> str:
+    repo_id = str(model_id or DEFAULT_QWEN_TTS_MODEL_ID).strip() or DEFAULT_QWEN_TTS_MODEL_ID
+    local_dir = str(target_dir or _DEFAULT_MODEL_PATH).strip() or _DEFAULT_MODEL_PATH
+    os.makedirs(local_dir, exist_ok=True)
+
+    def progress(message: str) -> None:
+        _runtime_log(message)
+        if progress_callback is not None:
+            progress_callback(message)
+
+    progress(f"Downloading model {repo_id} -> {local_dir}")
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError("缺少 huggingface_hub，无法自动下载本地 TTS 模型。请安装 requirements_local_tts.txt。") from exc
+
+    snapshot_download(
+        repo_id=repo_id,
+        local_dir=local_dir,
+        local_dir_use_symlinks=False,
+        resume_download=True,
+    )
+    if not qwen_tts_model_ready(local_dir):
+        raise RuntimeError(f"模型下载后仍不完整：{local_dir}")
+    progress("Qwen TTS model download complete")
+    return local_dir
 
 
 def _rms(audio: np.ndarray) -> float:
@@ -146,6 +209,8 @@ class QwenTTSEngine:
         seed: int = 24681357,
         temperature: float = 0.9,
         top_p: float = 1.0,
+        model_id: str = DEFAULT_QWEN_TTS_MODEL_ID,
+        auto_download: bool = True,
         device: str = "cuda",
         runtime=None,
     ):
@@ -163,6 +228,8 @@ class QwenTTSEngine:
         self.seed = int(seed or 0)
         self.temperature = float(temperature or 0.9)
         self.top_p = float(top_p or 1.0)
+        self.model_id = str(model_id or DEFAULT_QWEN_TTS_MODEL_ID).strip() or DEFAULT_QWEN_TTS_MODEL_ID
+        self.auto_download = bool(auto_download)
         self.device = device
         self.runtime = runtime or get_default_runtime()
         self.model = None
@@ -191,6 +258,8 @@ class QwenTTSEngine:
         seed: int | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
+        model_id: str | None = None,
+        auto_download: bool | None = None,
     ):
         self.model_path = model_path
         self.ref_dir = ref_dir
@@ -206,6 +275,10 @@ class QwenTTSEngine:
             self.temperature = float(temperature or self.temperature)
         if top_p is not None:
             self.top_p = float(top_p or self.top_p)
+        if model_id is not None:
+            self.model_id = str(model_id or self.model_id).strip() or self.model_id
+        if auto_download is not None:
+            self.auto_download = bool(auto_download)
 
     def is_ready(self) -> bool:
         return self._ready
@@ -226,6 +299,8 @@ class QwenTTSEngine:
             import torch
             from faster_qwen3_tts import FasterQwen3TTS
 
+            if self.auto_download and not qwen_tts_model_ready(self.model_path):
+                self.model_path = download_qwen_tts_model(self.model_id, self.model_path)
             _runtime_log(f"Loading model: {self.model_path}")
             t0 = time.perf_counter()
             self.model = FasterQwen3TTS.from_pretrained(
@@ -244,6 +319,8 @@ class QwenTTSEngine:
                 _ = _tf.AutoConfig
                 import torch
                 from faster_qwen3_tts import FasterQwen3TTS
+                if self.auto_download and not qwen_tts_model_ready(self.model_path):
+                    self.model_path = download_qwen_tts_model(self.model_id, self.model_path)
                 _runtime_log(f"Loading model (retry): {self.model_path}")
                 t0 = time.perf_counter()
                 self.model = FasterQwen3TTS.from_pretrained(
@@ -346,6 +423,9 @@ class QwenTTSEngine:
             ref_audio=ref_wav,
             ref_text=ref_text,
             xvec_only=self.xvec_only,
+            do_sample=self.do_sample,
+            temperature=self.temperature,
+            top_p=self.top_p,
         )
 
         audio = audio_list[0] if isinstance(audio_list, (list, tuple)) else audio_list
@@ -391,6 +471,9 @@ class QwenTTSEngine:
                 ref_text=ref_text,
                 chunk_size=chunk_size,
                 xvec_only=self.xvec_only,
+                do_sample=self.do_sample,
+                temperature=self.temperature,
+                top_p=self.top_p,
             )
         ):
             if hasattr(audio_chunk, "cpu"):
