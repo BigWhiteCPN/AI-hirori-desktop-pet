@@ -131,7 +131,7 @@ class PetInteractionMixin:
             feedback = random.choice(feedbacks.get(result, feedbacks["participate"]))
         self.speak_interaction_feedback(feedback, emotion="joy")
         self.interaction_memory_add(
-            f"用户和小日和玩小游戏，结果是{result}",
+            f"用户和角色玩小游戏，结果是{result}",
             feedback,
             emotion="joy",
             max_daily_count=8,
@@ -192,7 +192,7 @@ class PetInteractionMixin:
         )
         self.speak_interaction_feedback(feedback, emotion="joy")
         self.interaction_memory_add(
-            "用户按下能量作弊码，直接把小日和的能量恢复到满值",
+            "用户按下能量作弊码，直接把角色的能量恢复到满值",
             feedback,
             emotion="joy",
             max_daily_count=3,
@@ -210,7 +210,7 @@ class PetInteractionMixin:
                 feedback = feed_result.get("message") or "我现在吃不下啦。"
                 self.speak_interaction_feedback(feedback, emotion="neutral")
                 self.interaction_memory_add(
-                    "用户想继续投喂小日和，但她因为已经很饱而拒绝了。",
+                    "用户想继续投喂角色，但她因为已经很饱而拒绝了。",
                     feedback,
                     emotion="neutral",
                     max_daily_count=6,
@@ -242,14 +242,14 @@ class PetInteractionMixin:
             if not feed_already_applied:
                 self.physiology_on_feed()
             memory_user_text = (
-                f"用户给小日和喂饭，今天第 {result['count']} 次，"
+                f"用户给角色喂饭，今天第 {result['count']} 次，"
                 f"能量增加 {result['energy_gain']:.1f}，亲密增加 {result['relation_gain']:.1f}"
             )
         else:
             feedback = self.build_pat_feedback(result)
             self.physiology_on_pat()
             memory_user_text = (
-                f"用户摸了小日和的头，今天第 {result['count']} 次，"
+                f"用户摸了角色的头，今天第 {result['count']} 次，"
                 f"亲密增加 {result['relation_gain']:.1f}"
             )
         self.speak_interaction_feedback(feedback, emotion="joy")
@@ -277,14 +277,14 @@ class PetInteractionMixin:
                 ]
             )
             self.drive.adjust(affinity=0.4, companionship=0.2)
-            self.drive.record_intent("drink", "用户提醒小日和喝水")
+            self.drive.record_intent("drink", "用户提醒角色喝水")
             self.drive.save()
             status = "喝水成功，口渴下降"
-            memory_user_text = "用户提醒小日和喝水，她接受了。"
+            memory_user_text = "用户提醒角色喝水，她接受了。"
         else:
             feedback = result.get("message") or "我现在不渴啦。"
             status = "她现在不渴，拒绝继续喝水。"
-            memory_user_text = "用户想继续让小日和喝水，但她因为水分已经足够而拒绝了。"
+            memory_user_text = "用户想继续让角色喝水，但她因为水分已经足够而拒绝了。"
         self.speak_interaction_feedback(feedback, emotion="joy" if result.get("accepted", False) else "neutral")
         self.interaction_memory_add(
             memory_user_text,

@@ -245,7 +245,7 @@ class SupermarketDialog(QDialog):
         econ = getattr(self.pet, 'economy', None)
         if econ:
             self.balance_label.setText(
-                f"\U0001f4b0 你的金币: {econ.user_wallet:.0f}    |    小日和的金币: {econ.character_wallet:.0f}"
+                f"\U0001f4b0 你的金币: {econ.user_wallet:.0f}    |    角色的金币: {econ.character_wallet:.0f}"
             )
         else:
             self.balance_label.setText("经济系统未初始化")
@@ -355,7 +355,7 @@ class BackpackDialog(QDialog):
 
         right_layout.addStretch()
 
-        self.use_btn = QPushButton("给小日和使用")
+        self.use_btn = QPushButton("给角色使用")
         self.use_btn.setEnabled(False)
         self.use_btn.clicked.connect(self._use_item)
         right_layout.addWidget(self.use_btn)
@@ -407,7 +407,7 @@ class BackpackDialog(QDialog):
             effect_parts.append(f"好感+{bonus:.1f}")
         self.detail_effects.setText("效果: " + ", ".join(effect_parts) if effect_parts else "")
         self.use_btn.setEnabled(True)
-        self.use_btn.setText(f"给小日和使用 {item['name']}")
+        self.use_btn.setText(f"给角色使用 {item['name']}")
 
     def _use_item(self):
         if not self.selected_item_id:
@@ -423,6 +423,6 @@ class BackpackDialog(QDialog):
                 self.detail_qty.setText("")
                 self.detail_effects.setText("")
                 self.use_btn.setEnabled(False)
-                self.use_btn.setText("给小日和使用")
+                self.use_btn.setText("给角色使用")
             else:
                 self._on_card_click(self.selected_item_id)

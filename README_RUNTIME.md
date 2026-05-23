@@ -28,7 +28,7 @@
 
 1. Windows 上克隆仓库
 2. 跑 `setup_persona_bot_test.bat`
-3. 至少准备 `DEEPSEEK_API_KEY`
+3. 准备 `DEEPSEEK_API_KEY`，或首次登录选择本地 `qwen3:4b-instruct`
 4. 如果没有本地 GPU TTS 条件，再准备 `VOLCENGINE_TTS_API_KEY`
 5. 用 `run_persona_bot_test.bat` 启动
 
@@ -48,6 +48,7 @@ Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
 ## 首次配置
 
 - API 模式：在 `persona_llm_config.json` 填 `api_key`，或设置 `DEEPSEEK_API_KEY`
+- 本地大模型：安装 Ollama 后，在首次登录选择“本地 Qwen3 4B Instruct（Ollama）”；默认模型 `qwen3:4b-instruct`，模型目录 `third_party/ollama_models`
 - 云端语音合成：设置 `VOLCENGINE_TTS_API_KEY`
 - 本地 TTS：把 `tts_provider` 改成 `local`，并安装 `requirements_local_tts.txt`
 - 默认本地 TTS 模型目录：`third_party/qwen_tts_model/`

@@ -14,7 +14,8 @@
 
 如果我是第一次接触这个项目，我会先这样判断自己能不能跑：
 
-- 只有 Windows + DeepSeek key，没有 GPU：可以先跑文本对话，但想要稳定语音体验，最好再配 `VOLCENGINE_TTS_API_KEY`
+- 只有 Windows + DeepSeek key，没有 GPU：可以先跑云端文本对话，但想要稳定语音体验，最好再配 `VOLCENGINE_TTS_API_KEY`
+- 不想用任何 API：首次登录选择“本地 Qwen3 4B Instruct（Ollama）”，先安装 Ollama，程序会把模型缓存到 `third_party/ollama_models`
 - 有 Windows + NVIDIA GPU + CUDA：可以走本地 TTS / 本地 ASR
 - 想用 browser agent：除了安装 Python 包，还要执行 `playwright install chromium`
 - 想用 OCR 截图问答：除了 Python 包，还要安装系统级 Tesseract
@@ -33,6 +34,7 @@
 | --- | --- | --- |
 | 只有 API 文本能力 | `DEEPSEEK_API_KEY` | 可用对话主链路；语音相关体验不完整 |
 | 想要最稳的首次体验 | `DEEPSEEK_API_KEY` + `VOLCENGINE_TTS_API_KEY` | 对话 + 云端语音合成 |
+| 不想用 API | Ollama + `qwen3:4b-instruct` | 本地大模型对话；首次下载较慢 |
 | 想用云端语音识别 | 再加 `DOUBAO_ASR_API_KEY` | 自由语音监听 / 云端 ASR |
 | 有 NVIDIA GPU + CUDA | 安装本地 TTS / ASR 依赖 | 本地 TTS、本地 ASR |
 | 想用聊天截图问答 | 安装 OCR 依赖 + Tesseract | OCR / 聊天截图分析 |
@@ -84,6 +86,14 @@ Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
 
 - 在 `persona_llm_config.json` 中填写 `api_key`
 - 设置环境变量 `DEEPSEEK_API_KEY`
+
+也可以在首次登录界面选择本地大模型：
+
+- 先安装 Ollama
+- 选择“本地 Qwen3 4B Instruct（Ollama）”
+- 默认模型是 `qwen3:4b-instruct`
+- 默认模型目录是 `third_party/ollama_models`
+- 首次启动会检查本机 Ollama，缺少模型时按配置自动执行拉取
 
 如果要使用云端语音服务，再设置：
 

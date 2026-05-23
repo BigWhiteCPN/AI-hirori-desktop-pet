@@ -2,6 +2,16 @@ from __future__ import annotations
 
 
 TOUCH_REACTIONS = ("happy", "shy", "annoyed", "clingy", "nervous", "calm")
+SENSITIVE_TOUCH_ZONES = {"chest", "private"}
+SENSITIVE_TOUCH_ALLOWED_TERMS = (
+    "恋人",
+    "伴侣",
+    "闺蜜",
+    "女朋友",
+    "男朋友",
+    "情侣",
+    "对象",
+)
 
 ZONE_LABELS = {
     "hair": "头发/头顶",
@@ -40,6 +50,13 @@ ZONE_FAMILIES = {
 
 def touch_zone_family(zone):
     return ZONE_FAMILIES.get(str(zone or "").strip().lower(), str(zone or "").strip().lower())
+
+
+def is_sensitive_touch_allowed(stage, relation_score):
+    stage_text = str(stage or "")
+    if any(term in stage_text for term in SENSITIVE_TOUCH_ALLOWED_TERMS):
+        return True
+    return float(relation_score or 0.0) >= 130.0
 
 
 def _pick_top_reaction(scores, allowed=None):
@@ -114,6 +131,7 @@ def decide_touch_reaction(emotion_snapshot, drive_snapshot, life_snapshot, perso
     interval = float(stimulus.meta.get("interval", 9.9) or 9.9)
     count = int(stimulus.meta.get("count", 1) or 1)
     fast_poke = count >= 3 and interval < 0.45
+    sensitive_blocked = zone in SENSITIVE_TOUCH_ZONES and not is_sensitive_touch_allowed(stage, relation_score)
 
     scores = {name: 0.0 for name in TOUCH_REACTIONS}
 
@@ -289,7 +307,26 @@ def decide_touch_reaction(emotion_snapshot, drive_snapshot, life_snapshot, perso
     if since_last > 3600 and relation_score >= 65:
         add("clingy", 1.5)
 
-    winner = _resolve_zone_reaction(zone, zone_family, scores, relation_score, trust, fast_poke, intimacy=intimacy)
+    if sensitive_blocked:
+        if zone == "private":
+            add("annoyed", 6.0)
+            add("nervous", 3.6)
+            add("happy", -8.0)
+            add("clingy", -5.0)
+            add("shy", -2.5)
+            add("calm", -2.4)
+        else:
+            add("annoyed", 4.8)
+            add("nervous", 3.0)
+            add("happy", -5.0)
+            add("clingy", -3.5)
+            add("shy", -2.0)
+            add("calm", -2.0)
+
+    if sensitive_blocked:
+        winner = "annoyed"
+    else:
+        winner = _resolve_zone_reaction(zone, zone_family, scores, relation_score, trust, fast_poke, intimacy=intimacy)
     prompt_directions = {
         "happy": "你现在有点开心，回复自然、轻快，不要太长。",
         "shy": "你现在有点害羞，回复轻一点，可以带点收着的亲近感。",
@@ -312,11 +349,13 @@ def decide_touch_reaction(emotion_snapshot, drive_snapshot, life_snapshot, perso
         "prompt_direction": prompt_directions[winner],
         "score": round(scores.get(winner, 0.0), 3),
         "scores": {key: round(value, 3) for key, value in scores.items()},
+        "sensitive_touch_blocked": bool(sensitive_blocked),
     }
     print("TOUCH_REACTION =", {
         "zone": zone, "emo": emo, "winner": winner,
         "intimacy": round(intimacy, 3),
         "trust": round(trust, 3), "relation": round(relation_score, 1),
+        "sensitive_blocked": bool(sensitive_blocked),
         "scores": result["scores"],
     })
     return result

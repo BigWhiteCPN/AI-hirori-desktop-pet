@@ -117,7 +117,7 @@ class ChatAdviceController:
         if self.memory_store is not None:
             memory_context = self.memory_store.build_prompt_context(ocr_text)
         system = (
-            "你是小日和在阅读聊天截图时的一种思考视角。"
+            "你是角色在阅读聊天截图时的一种思考视角。"
             "请结合 OCR 文本、记忆和对用户的理解，像亲近的朋友一样给出观察、可能的情绪脉络和可尝试的回应。"
             "如果信息不足，就把不确定性说清楚；建议要具体、温和、尊重对话双方。"
         )

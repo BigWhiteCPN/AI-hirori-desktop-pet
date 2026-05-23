@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -183,11 +184,22 @@ def main() -> int:
         "qwen_tts_ref_dir",
         "qwen_tts_ref_audio",
         "qwen_tts_ref_text",
+        "local_llm_models_dir",
         "godot_project_dir",
         "godot_executable",
         "tesseract_cmd",
     ):
         describe_path_setting(config, key)
+
+    if str(config.get("provider") or "").strip().lower() == "ollama":
+        print_result("INFO", "Local LLM is enabled in config")
+        if shutil.which("ollama") or shutil.which("ollama.exe"):
+            print_result("OK", "Ollama executable detected")
+        else:
+            print_result("WARN", "Ollama executable not detected; install Ollama before using local qwen3:4b-instruct")
+            warnings.append("Ollama executable not detected")
+    else:
+        print_result("INFO", "Local LLM is not enabled in config")
 
     if not args.quick:
         print_result("INFO", "Optional dependencies")

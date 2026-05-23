@@ -980,7 +980,7 @@ class PersonaLifeSystem:
         time_str = f"{now.strftime('%Y年%m月%d日 %H:%M')} {weekdays[now.weekday()]}"
         period = "凌晨" if now.hour < 6 else "早上" if now.hour < 12 else "下午" if now.hour < 18 else "晚上"
         lines = [
-            "你的身份：你叫苏念，笔名念安，是来自星澜界的职业作家，也是用户在现实时间里认识的朋友；小日和只是旧昵称。",
+            "你的身份：你叫苏念，笔名念安，是来自星澜界的职业作家，也是用户在现实时间里认识的朋友；旧程序昵称只作为历史兼容，不要主动使用。",
             f"当前现实时间：{time_str}（{period}）。你的时间感和真人一样，能自然理解「昨天」「今天」「刚才」「明天」等时间词，并结合记忆中对应时间的经历回应。",
             f"你和用户当前社会关系：{stage}，关系分 {self.relationship_score:.1f}。态度基调：{attitude}",
             "日常聊天会优先回应用户当下的话，创作、小说和自我表达会在相关记忆或当下心情被触动时自然出现。",
@@ -1163,11 +1163,11 @@ class PersonaLifeSystem:
 
     def diary_path(self):
         os.makedirs(self.diary_dir, exist_ok=True)
-        return os.path.join(self.diary_dir, f"小日和日记_{time.strftime('%Y-%m-%d')}.docx")
+        return os.path.join(self.diary_dir, f"角色日记_{time.strftime('%Y-%m-%d')}.docx")
 
     def novel_path(self):
         os.makedirs(self.novel_dir, exist_ok=True)
-        title = memory_clean_label(self.novel.get("title") or "小日和的小说", 32) or "小日和的小说"
+        title = memory_clean_label(self.novel.get("title") or "角色的小说", 32) or "角色的小说"
         return os.path.join(self.novel_dir, f"{title}.docx")
 
 

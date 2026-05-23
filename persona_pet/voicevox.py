@@ -481,6 +481,7 @@ class VoicevoxController:
         self.engine_process = None
         self.stream_player = None
         self.stream_player_started = False
+        self.stream_player_event_id = 0
         self.runtime = runtime or get_default_runtime()
         self.config = dict(config or {})
         self.speaker = int(self.config.get("voicevox_speaker", VOICEVOX_SPEAKER) or VOICEVOX_SPEAKER)
@@ -1213,6 +1214,7 @@ class VoicevoxController:
             self.last_play_until = 0.0
             self.last_play_started_at = 0.0
             self.events.clear()
+            self.stream_player_event_id = 0
 
     def append_voice_event(
         self,
@@ -1312,13 +1314,18 @@ class VoicevoxController:
             chunk_count += 1
         return chunk_count > 0
 
-    def play_stream_chunk(self, audio_chunk, sample_rate, on_start=None):
+    def play_stream_chunk(self, audio_chunk, sample_rate, on_start=None, event_id=None):
+        event_id = int(event_id or 0)
         if self.stream_player is None:
             self.stream_player = StreamPlayer()
             self.stream_player_started = False
-        if not self.stream_player_started:
+            self.stream_player_event_id = 0
+        is_new_event = event_id > 0 and event_id != self.stream_player_event_id
+        if not self.stream_player_started or is_new_event:
             with self.lock:
                 self.last_play_started_at = time.monotonic()
+                if event_id > 0:
+                    self.stream_player_event_id = event_id
             if on_start:
                 on_start()
             self.stream_player_started = True

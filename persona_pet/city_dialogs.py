@@ -192,7 +192,7 @@ class CityHallDialog(QDialog):
         self.econ_labels = {}
         for key, label_text in [
             ("user_wallet", "你的金币"),
-            ("char_wallet", "小日和的金币"),
+            ("char_wallet", "角色的金币"),
             ("total_earned", "累计收入"),
             ("total_spent", "累计支出"),
         ]:

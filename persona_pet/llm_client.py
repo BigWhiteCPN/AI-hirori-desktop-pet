@@ -9,7 +9,7 @@ import urllib.request
 from dataclasses import dataclass, field
 
 from persona_pet.lexicon import HARD_BOUNDARY_REPLY_TERMS
-from persona_pet.llm_config import build_default_llm_config
+from persona_pet.llm_config import DEFAULT_LOCAL_LLM_BASE_URL, DEFAULT_LOCAL_LLM_MODEL, build_default_llm_config
 from persona_pet.memory import (
     clean_spoken_reply_text,
     compact_text,
@@ -788,7 +788,7 @@ class LLMClient:
         if custom_persona:
             origin_context += "\n[当前身份校正] 正式自我认知以用户自定义背景为准；默认苏念设定只作为未自定义时的备用模板。"
         else:
-            origin_context += "\n[当前身份校正] 你真实姓名是苏念，笔名念安；小日和只是程序旧昵称或用户可能沿用的称呼。正式自我认知、原世界经历、价值观和创作身份以苏念设定为准。"
+            origin_context += "\n[当前身份校正] 你真实姓名是苏念，笔名念安；旧程序昵称只作为历史兼容，不要主动使用。正式自我认知、原世界经历、价值观和创作身份以苏念设定为准。"
         writing_status = build_writing_status_context(getattr(self, 'life_system', None))
         persona_background_context = build_persona_background_context(self.config)
         messages = [{"role": "system", "content": system_prompt + time_context + origin_context + speech_style_context + persona_background_context + writing_status}]
@@ -913,15 +913,66 @@ class LLMClient:
             raw = response.read()
         return json.loads(raw.decode("utf-8"))
 
+    def build_ollama_options(self, temperature=0.75, initiated_by="user"):
+        options = {
+            "temperature": float(temperature),
+        }
+        try:
+            num_ctx = int(self.config.get("local_llm_context_tokens") or 0)
+        except Exception:
+            num_ctx = 0
+        if num_ctx > 0:
+            options["num_ctx"] = num_ctx
+        predict_key = "local_llm_stimulus_num_predict" if str(initiated_by or "").strip() == "stimulus" else "local_llm_num_predict"
+        try:
+            num_predict = int(self.config.get(predict_key) or self.config.get("local_llm_num_predict") or 0)
+        except Exception:
+            num_predict = 0
+        if num_predict > 0:
+            options["num_predict"] = num_predict
+        return options
+
+    def prepare_ollama_messages(self, messages):
+        prepared = [dict(message) for message in messages]
+        return prepared
+
+    def build_stimulus_messages(self, user_text):
+        system = (
+            "你是桌面角色苏念，正在和用户进行实时触摸互动。"
+            "只输出有效 JSON，不要输出 Markdown、思考过程、旁白或括号动作。"
+            "JSON 格式必须是："
+            "{\"zh\":\"一句中文短回应\",\"emotion\":\"joy/sadness/anger/fear/surprise/neutral\","
+            "\"segments\":[],\"prosody\":{\"pace\":\"slow/normal/fast\",\"tone\":\"soft/bright/serious/teasing/urgent\",\"emphasis\":[],\"pause_after\":[]}}。"
+            "zh 必须是你亲口说出的短句，不超过50字。"
+        )
+        return [{"role": "system", "content": system}, {"role": "user", "content": user_text}]
+
     def chat_ollama(self, user_text, model_override="", initiated_by="user"):
-        base_url = str(self.config.get("base_url") or self.default_config["base_url"]).rstrip("/")
+        base_url = str(
+            self.config.get("base_url")
+            or self.config.get("local_llm_base_url")
+            or self.default_config.get("local_llm_base_url")
+            or DEFAULT_LOCAL_LLM_BASE_URL
+        ).rstrip("/")
+        options = self.build_ollama_options(
+            temperature=float(self.config.get("temperature", 0.75)),
+            initiated_by=initiated_by,
+        )
         payload = {
-            "model": str(model_override or self.config.get("model", self.default_config["model"])),
-            "messages": self.build_messages(user_text, initiated_by=initiated_by),
+            "model": str(
+                model_override
+                or self.config.get("model")
+                or self.config.get("local_llm_model")
+                or self.default_config.get("local_llm_model")
+                or DEFAULT_LOCAL_LLM_MODEL
+            ),
+            "messages": self.prepare_ollama_messages(
+                self.build_stimulus_messages(user_text)
+                if initiated_by == "stimulus"
+                else self.build_messages(user_text, initiated_by=initiated_by)
+            ),
             "stream": False,
-            "options": {
-                "temperature": float(self.config.get("temperature", 0.75)),
-            },
+            "options": options,
         }
         data = self.post_json(f"{base_url}/api/chat", payload, timeout=180)
         reply = data.get("message", {}).get("content", "")
@@ -1137,12 +1188,24 @@ class LLMClient:
         return self.clean_reply(choices[0].get("message", {}).get("content", "") if choices else "")
 
     def chat_ollama_messages(self, messages, temperature=0.35, timeout=120, model_override=""):
-        base_url = str(self.config.get("base_url") or self.default_config["base_url"]).rstrip("/")
+        base_url = str(
+            self.config.get("base_url")
+            or self.config.get("local_llm_base_url")
+            or self.default_config.get("local_llm_base_url")
+            or DEFAULT_LOCAL_LLM_BASE_URL
+        ).rstrip("/")
+        options = self.build_ollama_options(temperature=temperature)
         payload = {
-            "model": str(model_override or self.config.get("model", self.default_config["model"])),
-            "messages": messages,
+            "model": str(
+                model_override
+                or self.config.get("model")
+                or self.config.get("local_llm_model")
+                or self.default_config.get("local_llm_model")
+                or DEFAULT_LOCAL_LLM_MODEL
+            ),
+            "messages": self.prepare_ollama_messages(messages),
             "stream": False,
-            "options": {"temperature": temperature},
+            "options": options,
         }
         data = self.post_json(f"{base_url}/api/chat", payload, timeout=timeout)
         return self.clean_reply(data.get("message", {}).get("content", ""))

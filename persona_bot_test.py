@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QMenu,
     QOpenGLWidget,
+    QProgressDialog,
     QToolButton,
 )
 
@@ -59,10 +60,21 @@ from persona_pet.chat_capture import ChatAdviceCaptureMixin
 from persona_pet.heart import HeartMixin
 from persona_pet.library_dialogs import LifeLibraryDialog
 from persona_pet.llm_config import (
+    DEFAULT_LOCAL_LLM_BASE_URL,
     build_default_llm_config,
     load_llm_config_file,
     resolve_project_path,
     save_llm_config_file,
+)
+from persona_pet.local_llm import (
+    apply_local_llm_environment,
+    is_local_llm_config,
+    normalize_local_llm_config,
+    ollama_executable,
+    ollama_model_installed,
+    pull_ollama_model,
+    resolve_local_models_dir,
+    start_ollama_server,
 )
 from persona_pet.llm_client import LLMChatController
 from persona_pet.life_system import PersonaDriveSystem, PersonaLifeSystem
@@ -191,6 +203,74 @@ def show_startup_message(parent, title, text, icon=QMessageBox.Information):
         """
     )
     box.exec_()
+
+
+def prepare_local_llm_if_needed(config, parent=None):
+    if not is_local_llm_config(config):
+        return True
+    config = normalize_local_llm_config(config)
+    models_dir = apply_local_llm_environment(BASE_DIR, config)
+    model = str(config.get("model") or config.get("local_llm_model") or DEFAULT_LOCAL_LLM_MODEL).strip() or DEFAULT_LOCAL_LLM_MODEL
+    base_url = str(config.get("base_url") or config.get("local_llm_base_url") or DEFAULT_LOCAL_LLM_BASE_URL).rstrip("/")
+
+    if not ollama_executable():
+        show_startup_message(
+            parent,
+            "本地模型不可用",
+            "当前选择了本地 Qwen3 4B，但没有检测到 Ollama。\n请先安装 Ollama，或编辑 persona_llm_config.json 切回 DeepSeek 云端模型。",
+            icon=QMessageBox.Warning,
+        )
+        return False
+
+    if not start_ollama_server(BASE_DIR, config):
+        show_startup_message(
+            parent,
+            "本地模型不可用",
+            f"无法连接本机 Ollama 服务：{base_url}\n请确认 Ollama 可以正常启动。",
+            icon=QMessageBox.Warning,
+        )
+        return False
+
+    if ollama_model_installed(base_url, model):
+        return True
+
+    if not bool(config.get("local_llm_auto_pull", True)):
+        show_startup_message(
+            parent,
+            "本地模型未下载",
+            f"没有检测到 {model}。\n请运行 ollama pull {model}，或在设置里开启自动下载。\n模型目录：{models_dir or resolve_local_models_dir(BASE_DIR, config)}",
+            icon=QMessageBox.Warning,
+        )
+        return False
+
+    progress = QProgressDialog(parent)
+    progress.setWindowTitle("下载本地模型")
+    progress.setLabelText(f"正在下载 {model} 到项目模型目录...\n{models_dir or resolve_local_models_dir(BASE_DIR, config)}")
+    progress.setCancelButton(None)
+    progress.setRange(0, 0)
+    progress.setMinimumWidth(520)
+    progress.setWindowModality(Qt.ApplicationModal)
+    progress.show()
+    QApplication.processEvents()
+
+    def update_progress(line):
+        display = line[-160:] if line else "正在下载..."
+        progress.setLabelText(f"正在下载 {model} 到项目模型目录...\n{display}")
+        QApplication.processEvents()
+
+    try:
+        pull_ollama_model(BASE_DIR, config, progress_callback=update_progress)
+    except Exception as exc:
+        progress.close()
+        show_startup_message(
+            parent,
+            "本地模型下载失败",
+            f"下载 {model} 失败：{exc}\n可以手动运行 ollama pull {model} 后再启动。",
+            icon=QMessageBox.Warning,
+        )
+        return False
+    progress.close()
+    return True
 
 
 class StartupLoadingDialog(QDialog):
@@ -1570,6 +1650,8 @@ class Live2DDesktopPet(
         if self.model is None:
             return False
         try:
+            if not self.model.IsMotionFinished():
+                return False
             self.model.StartMotion("Idle", random.randrange(max(1, self.motion_groups.get("Idle", 1))), 1)
             self.show_chat_status("她决定先安静陪着你。", seconds=2.4)
             print("PROACTIVE_SILENT = silent_motion")
@@ -1782,6 +1864,8 @@ class Live2DDesktopPet(
         if dialog.exec_() != QDialog.Accepted:
             return
         new_config = dialog.values()
+        if not prepare_local_llm_if_needed(new_config, parent=self):
+            return
         try:
             save_llm_config(new_config)
         except Exception as exc:
@@ -1911,7 +1995,7 @@ class Live2DDesktopPet(
         self.library_dialog.show()
         self.library_dialog.raise_()
         self.library_dialog.activateWindow()
-        self.show_chat_status("已打开小日和的书架。", seconds=2.0)
+        self.show_chat_status("已打开角色的书架。", seconds=2.0)
 
     def open_schedule_dialog(self):
         from persona_pet.ui_dialogs import ScheduleDialog
@@ -2143,6 +2227,7 @@ def build_surface_format():
 def prompt_for_api_key_if_needed(parent=None):
     config = load_llm_config()
     profile = str(RUN_PROFILE or "main").strip() or "main"
+    local_llm_prepared = False
     if profile != "main" and not RESET_PROFILE_ON_START:
         changed_onboarding = False
         if not bool(config.get("onboarding_complete")):
@@ -2184,6 +2269,10 @@ def prompt_for_api_key_if_needed(parent=None):
         )
         if dialog.exec_() == QDialog.Accepted:
             config = dialog.values()
+            if is_local_llm_config(config):
+                if not prepare_local_llm_if_needed(config, parent=parent):
+                    return None
+                local_llm_prepared = True
             try:
                 save_llm_config(config)
             except Exception as exc:
@@ -2199,6 +2288,12 @@ def prompt_for_api_key_if_needed(parent=None):
     allow_startup_prompts = bool(config.get("startup_credential_prompts", False))
     provider = str(config.get("provider", "")).lower()
     changed = False
+
+    if provider == "ollama":
+        normalized = normalize_local_llm_config(config)
+        if normalized != config:
+            config = normalized
+            changed = True
 
     if provider in ("openai", "openai_compatible", "compatible"):
         api_key_env = config.get("api_key_env") or "OPENAI_API_KEY"
@@ -2283,6 +2378,8 @@ def prompt_for_api_key_if_needed(parent=None):
             save_llm_config(config)
         except Exception as exc:
             print("LLM_CONFIG_SAVE_ERROR =", exc)
+    if not local_llm_prepared and not prepare_local_llm_if_needed(config, parent=parent):
+        return None
     return config
 
 

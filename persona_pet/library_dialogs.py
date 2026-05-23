@@ -132,7 +132,7 @@ class LifeLibraryDialog(QDialog):
         self.pages = ["还没有内容。"]
         self.page_index = 0
         self.filter_kind = "all"
-        self.setWindowTitle("小日和的书架")
+        self.setWindowTitle("角色的书架")
         self.resize(960, 660)
         self.setMinimumSize(780, 540)
         self.setStyleSheet(
@@ -226,7 +226,7 @@ class LifeLibraryDialog(QDialog):
         root.addLayout(header)
         title_block = QVBoxLayout()
         header.addLayout(title_block, 1)
-        title = QLabel("小日和的书架")
+        title = QLabel("角色的书架")
         title.setObjectName("libraryTitle")
         title_block.addWidget(title)
         subtitle = QLabel("翻看她写过的日记和小说。左侧筛选，右侧阅读。方向键也可以翻页。")

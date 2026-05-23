@@ -276,7 +276,7 @@ class CityModeMixin:
         # Balance text
         econ = getattr(self, 'economy', None)
         if econ:
-            balance_text = f"\U0001f4b0 你的: {econ.user_wallet:.0f}  |  小日和的: {econ.character_wallet:.0f}"
+            balance_text = f"\U0001f4b0 你的: {econ.user_wallet:.0f}  |  角色的: {econ.character_wallet:.0f}"
         else:
             balance_text = "\U0001f4b0 经济系统未初始化"
 

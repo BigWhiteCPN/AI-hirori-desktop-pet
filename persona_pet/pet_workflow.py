@@ -28,7 +28,11 @@ from persona_pet.speech import clean_speech_input_text, normalize_speech_piece
 from persona_pet.error_reporter import report_exception
 from persona_pet.runtime import get_default_runtime
 from persona_pet.stimulus import Stimulus
-from persona_pet.touch_reaction import ZONE_LABELS, decide_touch_reaction, touch_zone_family
+from persona_pet.touch_reaction import (
+    ZONE_LABELS,
+    decide_touch_reaction,
+    touch_zone_family,
+)
 from persona_pet.voicevox import estimate_sentence_seconds
 from persona_pet.voicevox import normalize_tts_emotion
 
@@ -200,6 +204,11 @@ class PetWorkflowMixin:
             self._remember_stimulus(stimulus, reaction=reaction)
         except Exception as exc:
             report_exception(getattr(self, "runtime", None), getattr(self, "runtime_logger", None), "pet_workflow", "remember_stimulus", exc, stimulus_type=stimulus.type)
+        stimulus_analysis = self._analysis_from_stimulus(stimulus, reaction=reaction)
+        self.current_analysis = stimulus_analysis
+        self.mixer.set_target(stimulus_analysis.weights)
+        if hasattr(self, "behavior"):
+            self.behavior.analysis = stimulus_analysis
         if stimulus.type == "touch" and hasattr(self, "behavior") and hasattr(self, "model") and self.model:
             try:
                 zone = str(stimulus.meta.get("zone") or stimulus.zone or "").lower()
@@ -212,6 +221,13 @@ class PetWorkflowMixin:
                     "cheek": "m08_joy",
                 }
                 motion_key = _zone_motion_map.get(zone, "m07_surprise")
+                # Reaction override: touch reactions should be visible immediately,
+                # without waiting for the inertia-based emotion engine to catch up.
+                reaction_emotion = str((reaction or {}).get("emotion_tag") or "").lower()
+                if reaction_emotion == "anger":
+                    motion_key = "m09_anger"
+                elif reaction_emotion in ("sadness", "fear"):
+                    motion_key = "m04_wronged_sadness"
                 # Emotion override: only anger and sadness/fear
                 if hasattr(self, "emotion_engine"):
                     emo_snap = self.emotion_engine.state.snapshot()
@@ -222,25 +238,31 @@ class PetWorkflowMixin:
                     elif dominant in ("sadness", "fear") and intensity > 0.25:
                         motion_key = "m04_wronged_sadness"
                 blush_zones = {"private", "thigh", "chest", "belly", "neck"}
-                if zone in blush_zones and hasattr(self, "_touch_visual"):
+                allow_blush = not bool((reaction or {}).get("sensitive_touch_blocked"))
+                if zone in blush_zones and allow_blush and hasattr(self, "_touch_visual"):
                     try:
                         self._touch_visual.trigger_blush(zone)
                     except Exception:
                         pass
-                from persona_pet.behavior import EmotionAnalysis
-                self.behavior.trigger_emotion_motion(
-                    self.model,
-                    EmotionAnalysis.neutral(),
-                    motion_key_override=motion_key,
-                    force=True,
+                now = time.monotonic()
+                last_touch_motion_at = float(getattr(self, "_last_touch_motion_at", 0.0) or 0.0)
+                touch_motion_gap = 0.85
+                motion_busy = (
+                    self.voice.is_busy_or_playing(now)
+                    or self.behavior.is_speaking(now)
+                    or now - last_touch_motion_at < touch_motion_gap
                 )
+                if not motion_busy:
+                    self.behavior.trigger_emotion_motion(
+                        self.model,
+                        stimulus_analysis,
+                        motion_key_override=motion_key,
+                        force=True,
+                    )
+                    self._last_touch_motion_at = now
+                    self._last_touch_motion_key = motion_key
             except Exception as exc:
                 report_exception(getattr(self, "runtime", None), getattr(self, "runtime_logger", None), "pet_workflow", "touch_motion_trigger", exc)
-        if stimulus.type != "touch":
-            self.current_analysis = self._analysis_from_stimulus(stimulus, reaction=reaction)
-            self.mixer.set_target(self.current_analysis.weights)
-            if hasattr(self, "behavior"):
-                self.behavior.analysis = self.current_analysis
         stimulus_log = {
             "type": stimulus.type,
             "source": stimulus.source,
@@ -356,6 +378,12 @@ class PetWorkflowMixin:
                 companionship_delta -= 0.20
                 attachment_delta += 0.15
                 relation_delta -= 0.20
+            if bool((reaction or {}).get("sensitive_touch_blocked")):
+                affinity_delta -= 0.28
+                security_delta -= 0.65 if zone == "private" else 0.48
+                companionship_delta -= 0.20
+                attachment_delta += 0.22
+                relation_delta -= 0.35 if zone == "private" else 0.28
             if relation_score < 35.0 and zone_family in {"body", "leg", "private"}:
                 security_delta -= 0.35
                 relation_delta -= 0.10
@@ -487,6 +515,7 @@ class PetWorkflowMixin:
         relation_score = float(getattr(self.life, "relationship_score", 28.0) or 28.0)
         count = int(stimulus.meta.get("count", 1) or 1)
         positive = reaction["name"] in ("happy", "shy", "clingy")
+        sensitive_blocked = bool((reaction or {}).get("sensitive_touch_blocked"))
 
         # Build base prompt
         lines = [
@@ -498,7 +527,12 @@ class PetWorkflowMixin:
         ]
 
         # Repeated positive touch: encourage proactive / initiating speech
-        if positive and count >= 3 and relation_score >= 88:
+        if sensitive_blocked:
+            lines.append(
+                "这是越界触碰：当前关系还没到恋人、伴侣或闺蜜，不应该接受这个位置的触碰。"
+                "你要明确表达不舒服、不要碰这里，不能害羞迎合，也不要说没关系。"
+            )
+        elif positive and count >= 3 and relation_score >= 88:
             lines.append(
                 f"这已经是连续第{count}次触碰了，你很享受。"
                 "你可以说一句主动的话，比如请求继续、撒娇、或者轻哼。"
@@ -1053,11 +1087,21 @@ class PetWorkflowMixin:
             prosody_hint=prosody_hint,
             segments=voice_segments,
         )
+        event_key = int(event_id or 0)
+        voice_analyses = getattr(self, "_voice_event_analyses", None)
+        if not isinstance(voice_analyses, dict):
+            voice_analyses = {}
+            self._voice_event_analyses = voice_analyses
+        if event_key > 0:
+            voice_analyses[event_key] = analysis
+            if len(voice_analyses) > 24:
+                for old_key in sorted(voice_analyses)[:-24]:
+                    voice_analyses.pop(old_key, None)
         display_texts = getattr(self, "_voice_display_texts", None)
         if not isinstance(display_texts, dict):
             display_texts = {}
             self._voice_display_texts = display_texts
-        display_texts[int(event_id or 0)] = text or voice_text
+        display_texts[event_key] = text or voice_text
         if voice_was_busy:
             self.show_chat_status("她会说完这句再接下一句。", seconds=1.8)
         else:
@@ -1080,7 +1124,17 @@ class PetWorkflowMixin:
 
     def process_voice_events(self):
         for event in self.voice.consume_events():
+            event_key = int(getattr(event, "event_id", 0) or 0)
+            voice_analyses = getattr(self, "_voice_event_analyses", {})
+            if isinstance(voice_analyses, dict):
+                event_analysis = voice_analyses.get(event_key)
+            else:
+                event_analysis = None
+            if event_analysis is None:
+                event_analysis = self.last_voice_analysis
             if event.error:
+                if isinstance(voice_analyses, dict) and event_key > 0:
+                    voice_analyses.pop(event_key, None)
                 if "火山 TTS API Key" in event.error:
                     self.show_chat_status("请先填写 TTS API Key", seconds=6.0)
                 else:
@@ -1091,7 +1145,7 @@ class PetWorkflowMixin:
             is_streaming = bool(getattr(event, "streaming_chunk", False))
             is_stream_first_chunk = is_streaming and getattr(event, "part_index", 0) == 0
 
-            def sync_on_playback_start(duration=event.duration, analysis=self.last_voice_analysis, evt=event):
+            def sync_on_playback_start(duration=event.duration, analysis=event_analysis, evt=event):
                 self.last_assistant_activity_at = time.monotonic()
                 if not getattr(evt, "streaming_chunk", False) or getattr(evt, "part_index", 0) == 0:
                     display_texts = getattr(self, "_voice_display_texts", {})
@@ -1123,12 +1177,14 @@ class PetWorkflowMixin:
             if is_streaming and not is_stream_first_chunk:
                 self.last_assistant_activity_at = time.monotonic()
                 self.voice.extend_playing(event.duration)
-                self.behavior.extend_speech_to_audio(event.duration, analysis=self.last_voice_analysis)
+                self.behavior.extend_speech_to_audio(event.duration, analysis=event_analysis)
 
             if is_streaming:
-                self.voice.play_stream_chunk(event.audio_chunk, event.sample_rate, on_start=sync_on_playback_start)
+                self.voice.play_stream_chunk(event.audio_chunk, event.sample_rate, on_start=sync_on_playback_start, event_id=event.event_id)
             else:
                 self.voice.play_wav_async(event.wav_path, on_start=sync_on_playback_start)
+                if isinstance(voice_analyses, dict) and event_key > 0:
+                    voice_analyses.pop(event_key, None)
             if self.free_talk_enabled:
                 self.free_talk_next_at = (
                     time.monotonic()

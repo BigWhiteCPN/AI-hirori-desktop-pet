@@ -209,7 +209,7 @@ class BackpackMixin:
         if success:
             self.speak_interaction_feedback(desc, emotion="joy")
             self.interaction_memory_add(
-                f"用户给小日和使用了{ITEMS[item_id]['name']}",
+                f"用户给角色使用了{ITEMS[item_id]['name']}",
                 desc, emotion="joy", max_daily_count=6, count=1,
             )
         return success, desc

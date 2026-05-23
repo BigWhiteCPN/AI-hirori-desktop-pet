@@ -13,6 +13,17 @@ from persona_pet.error_reporter import report_exception_to_file
 from persona_pet.prompts import PROSODY_PROMPT_CONTRACT
 
 CONFIG_SCHEMA_VERSION = 2
+DEFAULT_LOCAL_LLM_PROVIDER = "ollama"
+DEFAULT_LOCAL_LLM_MODEL = "qwen3:4b-instruct"
+DEFAULT_LOCAL_LLM_BASE_URL = "http://127.0.0.1:11435"
+DEFAULT_LOCAL_LLM_MODELS_DIR = "third_party/ollama_models"
+THINKING_LOCAL_LLM_MODELS = {
+    "qwen3:4b",
+    "qwen3:4b-thinking",
+    "qwen3:4b-thinking-2507-q4_k_m",
+    "qwen3:4b-thinking-2507-q8_0",
+    "qwen3:4b-thinking-2507-fp16",
+}
 PROJECT_RELATIVE_ROOT_HINTS = (
     "assets",
     "docs",
@@ -60,6 +71,13 @@ def looks_like_remote_model_id(value):
     if first in PROJECT_RELATIVE_ROOT_HINTS:
         return False
     return normalized.count("/") == 1
+
+
+def normalize_local_llm_model_name(value):
+    text = str(value or "").strip() or DEFAULT_LOCAL_LLM_MODEL
+    if text.lower() in THINKING_LOCAL_LLM_MODELS:
+        return DEFAULT_LOCAL_LLM_MODEL
+    return text
 
 
 def resolve_project_path(base_dir, value):
@@ -111,6 +129,14 @@ def build_default_llm_config(
         "model": "deepseek-v4-pro",
         "fast_model": "deepseek-v4-flash",
         "reasoning_model": "deepseek-v4-pro",
+        "local_llm_provider": DEFAULT_LOCAL_LLM_PROVIDER,
+        "local_llm_model": DEFAULT_LOCAL_LLM_MODEL,
+        "local_llm_base_url": DEFAULT_LOCAL_LLM_BASE_URL,
+        "local_llm_models_dir": DEFAULT_LOCAL_LLM_MODELS_DIR,
+        "local_llm_auto_pull": True,
+        "local_llm_context_tokens": 8192,
+        "local_llm_num_predict": 360,
+        "local_llm_stimulus_num_predict": 180,
         "auto_model_routing_enabled": True,
         "auto_model_routing_threshold": 5.0,
         "base_url": "https://api.deepseek.com",
@@ -217,8 +243,28 @@ def migrate_llm_config(raw, defaults):
         provider = defaults.get("provider", "openai_compatible")
     data["provider"] = provider
 
+    if provider == "ollama":
+        local_model = normalize_local_llm_model_name(data.get("local_llm_model") or data.get("model"))
+        data["local_llm_model"] = local_model
+        local_base_url = str(data.get("local_llm_base_url") or DEFAULT_LOCAL_LLM_BASE_URL).strip() or DEFAULT_LOCAL_LLM_BASE_URL
+        if not str(data.get("base_url") or "").strip() or str(data.get("base_url") or "").strip() == str(defaults.get("base_url") or "").strip():
+            data["base_url"] = local_base_url
+        if (
+            not str(data.get("model") or "").strip()
+            or str(data.get("model") or "").strip() == str(defaults.get("model") or "").strip()
+            or str(data.get("model") or "").strip().lower() in THINKING_LOCAL_LLM_MODELS
+        ):
+            data["model"] = local_model
+        if not str(data.get("fast_model") or "").strip() or str(data.get("fast_model") or "").strip() == str(defaults.get("fast_model") or "").strip():
+            data["fast_model"] = local_model
+        if not str(data.get("reasoning_model") or "").strip() or str(data.get("reasoning_model") or "").strip() == str(defaults.get("reasoning_model") or "").strip():
+            data["reasoning_model"] = local_model
+
     data["temperature"] = _clamp_number(data.get("temperature"), defaults.get("temperature", 0.75), 0.0, 2.0, float)
     data["max_history_turns"] = int(_clamp_number(data.get("max_history_turns"), defaults.get("max_history_turns", 6), 2, 40, int))
+    data["local_llm_context_tokens"] = int(_clamp_number(data.get("local_llm_context_tokens"), defaults.get("local_llm_context_tokens", 8192), 1024, 262144, int))
+    data["local_llm_num_predict"] = int(_clamp_number(data.get("local_llm_num_predict"), defaults.get("local_llm_num_predict", 360), 64, 2048, int))
+    data["local_llm_stimulus_num_predict"] = int(_clamp_number(data.get("local_llm_stimulus_num_predict"), defaults.get("local_llm_stimulus_num_predict", 180), 64, 1024, int))
     data["auto_model_routing_threshold"] = _clamp_number(
         data.get("auto_model_routing_threshold"),
         defaults.get("auto_model_routing_threshold", 5.0),
@@ -231,9 +277,23 @@ def migrate_llm_config(raw, defaults):
     data["volcengine_tts_pitch_ratio"] = _clamp_number(data.get("volcengine_tts_pitch_ratio"), 1.0, 0.5, 2.0, float)
     data["singing_max_text_chars"] = int(_clamp_number(data.get("singing_max_text_chars"), defaults.get("singing_max_text_chars", 72), 12, 240, int))
 
-    for key in ("base_url", "api_key_env", "model", "fast_model", "reasoning_model", "tts_provider", "speech_provider", "credential_store_service", "persona_background"):
+    for key in (
+        "base_url",
+        "api_key_env",
+        "model",
+        "fast_model",
+        "reasoning_model",
+        "local_llm_provider",
+        "local_llm_model",
+        "local_llm_base_url",
+        "local_llm_models_dir",
+        "tts_provider",
+        "speech_provider",
+        "credential_store_service",
+        "persona_background",
+    ):
         data[key] = str(data.get(key) or defaults.get(key) or "").strip()
-    for key in ("onboarding_complete", "onboarding_first_greeting_pending", "startup_credential_prompts", "singing_enabled", "credential_store_enabled", "auto_model_routing_enabled"):
+    for key in ("onboarding_complete", "onboarding_first_greeting_pending", "startup_credential_prompts", "singing_enabled", "credential_store_enabled", "auto_model_routing_enabled", "local_llm_auto_pull"):
         data[key] = bool(data.get(key, defaults.get(key, False)))
     if not isinstance(data.get("credential_store"), dict):
         data["credential_store"] = {"enabled": data["credential_store_enabled"], "service": data["credential_store_service"], "refs": {}}

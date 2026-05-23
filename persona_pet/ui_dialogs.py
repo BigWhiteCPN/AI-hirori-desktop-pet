@@ -5,6 +5,7 @@ import random
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -23,6 +24,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from persona_pet.local_llm import normalize_local_llm_config
 
 class FirstRunDialog(QDialog):
     def __init__(self, config, parent=None, default_config=None, tts_defaults=None):
@@ -89,6 +92,16 @@ class FirstRunDialog(QDialog):
                 color: white;
                 border-color: #d94e91;
             }
+            QScrollArea#firstRunScroll {
+                border: none;
+                background: transparent;
+            }
+            QScrollArea#firstRunScroll > QWidget {
+                background: transparent;
+            }
+            QWidget#firstRunPanel {
+                background: transparent;
+            }
             """
         )
 
@@ -104,7 +117,20 @@ class FirstRunDialog(QDialog):
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
-        profile_form = self.add_section(layout, "用户身份")
+        scroll = QScrollArea(self)
+        scroll.setObjectName("firstRunScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.viewport().setAutoFillBackground(False)
+        panel = QWidget()
+        panel.setObjectName("firstRunPanel")
+        panel.setAutoFillBackground(False)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(8)
+
+        profile_form = self.add_section(panel_layout, "用户身份")
         self.gender_box = QComboBox()
         self.gender_box.addItems(["男", "女", "不透露"])
         current_gender = str(self.config.get("user_gender") or "不透露")
@@ -112,7 +138,7 @@ class FirstRunDialog(QDialog):
         self.gender_box.setCurrentIndex(idx if idx >= 0 else 2)
         profile_form.addRow("性别", self.gender_box)
 
-        persona_form = self.add_section(layout, "人物背景经历")
+        persona_form = self.add_section(panel_layout, "人物背景经历")
         background_hint = QLabel("留空会使用默认苏念背景；填写后会作为她的稳定背景经历参与对话。")
         background_hint.setObjectName("hintLabel")
         background_hint.setWordWrap(True)
@@ -125,8 +151,58 @@ class FirstRunDialog(QDialog):
             height=92,
         )
 
-        api_form = self.add_section(layout, "连接配置")
-        self.add_field(api_form, "DeepSeek API Key", "api_key", password=True)
+        api_form = self.add_section(panel_layout, "连接配置")
+        # LLM mode selection
+        llm_mode_label = QLabel("大模型模式")
+        llm_mode_label.setStyleSheet("font-weight: 700; color: #8f2d5a; margin-top: 8px;")
+        api_form.addRow(llm_mode_label)
+        self.llm_mode_group = QButtonGroup(self)
+        self.llm_cloud_radio = QRadioButton("DeepSeek 云端")
+        self.llm_local_radio = QRadioButton("本地 Qwen3 4B")
+        current_provider = str(self.config.get("provider") or "openai_compatible").strip().lower()
+        self.llm_local_radio.setChecked(current_provider == "ollama")
+        self.llm_cloud_radio.setChecked(current_provider != "ollama")
+        self.llm_mode_group.addButton(self.llm_cloud_radio, 0)
+        self.llm_mode_group.addButton(self.llm_local_radio, 1)
+        llm_choice_layout = QVBoxLayout()
+        llm_choice_layout.setContentsMargins(0, 0, 0, 0)
+        llm_choice_layout.setSpacing(4)
+        llm_choice_layout.addWidget(self.llm_cloud_radio)
+        cloud_hint = QLabel("需要 API Key，默认使用 DeepSeek 云端接口。")
+        cloud_hint.setObjectName("hintLabel")
+        cloud_hint.setWordWrap(True)
+        cloud_hint.setContentsMargins(24, 0, 0, 4)
+        llm_choice_layout.addWidget(cloud_hint)
+        llm_choice_layout.addWidget(self.llm_local_radio)
+        local_model_hint = QLabel("通过 Ollama 使用 qwen3:4b-instruct，免 API Key，可离线；首次需要下载模型。")
+        local_model_hint.setObjectName("hintLabel")
+        local_model_hint.setWordWrap(True)
+        local_model_hint.setContentsMargins(24, 0, 0, 0)
+        llm_choice_layout.addWidget(local_model_hint)
+        api_form.addRow("", llm_choice_layout)
+
+        self.llm_cloud_fields_widget = QWidget()
+        llm_cloud_form = QFormLayout(self.llm_cloud_fields_widget)
+        llm_cloud_form.setContentsMargins(0, 0, 0, 0)
+        self.add_field(llm_cloud_form, "DeepSeek API Key", "api_key", password=True)
+        api_form.addRow("", self.llm_cloud_fields_widget)
+
+        self.llm_local_fields_widget = QWidget()
+        llm_local_layout = QVBoxLayout(self.llm_local_fields_widget)
+        llm_local_layout.setContentsMargins(0, 0, 0, 0)
+        llm_local_form = QFormLayout()
+        llm_local_form.setContentsMargins(0, 0, 0, 0)
+        self.add_field(llm_local_form, "Ollama 模型", "local_llm_model", placeholder="qwen3:4b-instruct")
+        self.add_field(llm_local_form, "模型目录", "local_llm_models_dir", placeholder="third_party/ollama_models")
+        llm_local_layout.addLayout(llm_local_form)
+        self.local_llm_auto_pull_check = QCheckBox("缺失时自动下载模型")
+        self.local_llm_auto_pull_check.setChecked(bool(self.config.get("local_llm_auto_pull", True)))
+        llm_local_layout.addWidget(self.local_llm_auto_pull_check)
+        llm_local_hint = QLabel("模型会通过 Ollama 使用；默认缓存到项目内 third_party/ollama_models。首次下载体积较大，下载完成后可离线使用。")
+        llm_local_hint.setObjectName("hintLabel")
+        llm_local_hint.setWordWrap(True)
+        llm_local_layout.addWidget(llm_local_hint)
+        api_form.addRow("", self.llm_local_fields_widget)
 
         # TTS mode selection
         tts_mode_label = QLabel("语音合成模式")
@@ -193,8 +269,14 @@ class FirstRunDialog(QDialog):
 
         self.tts_volcengine_radio.toggled.connect(self._update_tts_fields_visibility)
         self.asr_volcengine_radio.toggled.connect(self._update_asr_fields_visibility)
+        self.llm_cloud_radio.toggled.connect(self._update_llm_fields_visibility)
+        self.llm_local_radio.toggled.connect(self._update_llm_fields_visibility)
+        self._update_llm_fields_visibility()
         self._update_tts_fields_visibility()
         self._update_asr_fields_visibility()
+
+        scroll.setWidget(panel)
+        layout.addWidget(scroll, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         save_button = buttons.button(QDialogButtonBox.Save)
@@ -223,6 +305,11 @@ class FirstRunDialog(QDialog):
         is_volcengine = self.tts_volcengine_radio.isChecked()
         self.volcengine_fields_widget.setVisible(is_volcengine)
         self.local_fields_widget.setVisible(not is_volcengine)
+
+    def _update_llm_fields_visibility(self):
+        is_local = self.llm_local_radio.isChecked()
+        self.llm_cloud_fields_widget.setVisible(not is_local)
+        self.llm_local_fields_widget.setVisible(is_local)
 
     def _update_asr_fields_visibility(self):
         is_volcengine = self.asr_volcengine_radio.isChecked()
@@ -281,6 +368,17 @@ class FirstRunDialog(QDialog):
         data["onboarding_first_greeting_pending"] = True
         data["persona_background"] = self.fields["persona_background"].toPlainText().strip()
         api_key = self.fields["api_key"].text().strip()
+        if self.llm_local_radio.isChecked():
+            data["local_llm_model"] = self.fields["local_llm_model"].text().strip() or "qwen3:4b-instruct"
+            data["local_llm_models_dir"] = self.fields["local_llm_models_dir"].text().strip() or "third_party/ollama_models"
+            data["local_llm_auto_pull"] = self.local_llm_auto_pull_check.isChecked()
+            data = normalize_local_llm_config(data)
+        else:
+            data["provider"] = "openai_compatible"
+            data["model"] = self.default_config.get("model") or "deepseek-v4-pro"
+            data["fast_model"] = self.default_config.get("fast_model") or "deepseek-v4-flash"
+            data["reasoning_model"] = self.default_config.get("reasoning_model") or "deepseek-v4-pro"
+            data["base_url"] = self.default_config.get("base_url") or "https://api.deepseek.com"
         if api_key:
             data["api_key"] = api_key
         # TTS provider
@@ -414,11 +512,43 @@ class ApiSettingsDialog(QDialog):
         panel_layout.setSpacing(10)
 
         llm_form = self.add_section(panel_layout, "大模型")
+        self.llm_provider_combo = QComboBox()
+        self.llm_provider_combo.addItem("DeepSeek 云端模型", "deepseek")
+        self.llm_provider_combo.addItem("本地 Qwen3 4B Instruct（Ollama）", "local")
+        self.llm_provider_combo.addItem("自定义/高级", "custom")
+        current_provider = str(self.config.get("provider") or "openai_compatible").strip().lower()
+        current_model = str(self.config.get("model") or "").strip()
+        if current_provider == "ollama":
+            mode_idx = 1
+        elif current_provider in ("openai", "openai_compatible", "compatible") and (not current_model or "deepseek" in current_model.lower()):
+            mode_idx = 0
+        else:
+            mode_idx = 2
+        self.llm_provider_combo.setCurrentIndex(mode_idx)
+        llm_form.addRow("连接模式", self.llm_provider_combo)
         self.add_field(llm_form, "Provider", "provider", placeholder="openai_compatible")
         self.add_field(llm_form, "模型", "model", placeholder="deepseek-chat")
         self.add_field(llm_form, "接口地址", "base_url", placeholder="https://api.deepseek.com")
         self.add_field(llm_form, "API Key", "api_key", password=True)
         self.add_field(llm_form, "环境变量", "api_key_env", placeholder="DEEPSEEK_API_KEY")
+        self.local_llm_fields_widget = QWidget()
+        local_llm_layout = QVBoxLayout(self.local_llm_fields_widget)
+        local_llm_layout.setContentsMargins(0, 0, 0, 0)
+        local_llm_form = QFormLayout()
+        local_llm_form.setContentsMargins(0, 0, 0, 0)
+        self.add_field(local_llm_form, "Ollama 模型", "local_llm_model", placeholder="qwen3:4b-instruct")
+        self.add_field(local_llm_form, "模型目录", "local_llm_models_dir", placeholder="third_party/ollama_models")
+        local_llm_layout.addLayout(local_llm_form)
+        self.local_llm_auto_pull_check = QCheckBox("缺失时自动下载模型")
+        self.local_llm_auto_pull_check.setChecked(bool(self.config.get("local_llm_auto_pull", True)))
+        local_llm_layout.addWidget(self.local_llm_auto_pull_check)
+        local_llm_hint = QLabel("保存为本地模式后会使用 Ollama 的 qwen3:4b-instruct；模型目录默认在项目内 third_party/ollama_models。")
+        local_llm_hint.setObjectName("hintLabel")
+        local_llm_hint.setWordWrap(True)
+        local_llm_layout.addWidget(local_llm_hint)
+        llm_form.addRow("", self.local_llm_fields_widget)
+        self.llm_provider_combo.currentIndexChanged.connect(self._update_llm_fields_visibility)
+        self._update_llm_fields_visibility()
 
         persona_form = self.add_section(panel_layout, "人物背景经历")
         persona_hint = QLabel("留空会使用默认苏念背景；填写后会作为她的稳定背景经历参与对话。")
@@ -539,6 +669,9 @@ class ApiSettingsDialog(QDialog):
         self.volcengine_fields_widget.setVisible(is_volcengine)
         self.local_fields_widget.setVisible(not is_volcengine)
 
+    def _update_llm_fields_visibility(self):
+        self.local_llm_fields_widget.setVisible(self.llm_provider_combo.currentData() == "local")
+
     def _update_asr_fields_visibility(self):
         is_volcengine = self.asr_provider_combo.currentData() == "doubao"
         self.asr_volcengine_widget.setVisible(is_volcengine)
@@ -604,6 +737,16 @@ class ApiSettingsDialog(QDialog):
                 data[key] = field.toPlainText().strip()
             else:
                 data[key] = field.text().strip()
+        llm_mode = self.llm_provider_combo.currentData()
+        if llm_mode == "local":
+            data["local_llm_auto_pull"] = self.local_llm_auto_pull_check.isChecked()
+            data = normalize_local_llm_config(data)
+        elif llm_mode == "deepseek":
+            data["provider"] = "openai_compatible"
+            data["model"] = self.default_config.get("model") or "deepseek-v4-pro"
+            data["fast_model"] = self.default_config.get("fast_model") or "deepseek-v4-flash"
+            data["reasoning_model"] = self.default_config.get("reasoning_model") or "deepseek-v4-pro"
+            data["base_url"] = self.default_config.get("base_url") or "https://api.deepseek.com"
         provider = self.tts_provider_combo.currentData()
         data["tts_provider"] = provider
         if provider != "local":
@@ -629,7 +772,7 @@ class MiniGameDialog(QDialog):
                 ("我作为小说家，最容易注意到什么？", ["细节", "数字", "天气预报"]),
             ]
         )
-        self.setWindowTitle("和小日和玩一会儿")
+        self.setWindowTitle("和角色玩一会儿")
         self.resize(520, 460)
         self.setMinimumSize(460, 420)
         self.setStyleSheet(
@@ -736,7 +879,7 @@ class MiniGameDialog(QDialog):
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setPlainText("小日和：要玩哪个？我会认真陪你玩的。")
+        self.log.setPlainText("角色：要玩哪个？我会认真陪你玩的。")
         root.addWidget(self.log, 1)
 
     def append_log(self, text):
@@ -750,11 +893,11 @@ class MiniGameDialog(QDialog):
         try:
             value = int(self.guess_input.text().strip())
         except Exception:
-            self.append_log("小日和：要输入 1 到 20 的数字哦。")
+            self.append_log("角色：要输入 1 到 20 的数字哦。")
             self.pet.speak_interaction_feedback("要输入 1 到 20 的数字哦，不然我没法判断你有没有猜中。", emotion="joy")
             return
         if value < 1 or value > 20:
-            self.append_log(f"小日和：{value} 超出范围啦，数字只能在 1 到 20 之间。")
+            self.append_log(f"角色：{value} 超出范围啦，数字只能在 1 到 20 之间。")
             self.pet.speak_interaction_feedback(f"{value} 超出范围啦，我心里的数字只在 1 到 20 之间。", emotion="joy")
             return
         self.guess_attempts += 1
@@ -765,19 +908,19 @@ class MiniGameDialog(QDialog):
             self.guess_attempts = 0
             self.reward(
                 "win",
-                f"小日和：猜中了，是 {secret}！居然第 {attempts} 次就抓到我的想法了。下一轮我已经换了新数字。",
+                f"角色：猜中了，是 {secret}！居然第 {attempts} 次就抓到我的想法了。下一轮我已经换了新数字。",
                 voice_text=f"猜中了，是 {secret}。第 {attempts} 次就抓到我的数字了，厉害。下一轮我已经偷偷换了一个新数字。",
             )
         elif value < self.secret_number:
             self.reward(
                 "participate",
-                f"小日和：你猜 {value}，小啦，我的数字比它大。",
+                f"角色：你猜 {value}，小啦，我的数字比它大。",
                 voice_text=f"你猜 {value}，小啦。我的数字比 {value} 大，再往上试试。",
             )
         else:
             self.reward(
                 "participate",
-                f"小日和：你猜 {value}，大啦，我的数字比它小。",
+                f"角色：你猜 {value}，大啦，我的数字比它小。",
                 voice_text=f"你猜 {value}，大啦。我的数字比 {value} 小一点，稍微收回来。",
             )
 
@@ -787,15 +930,15 @@ class MiniGameDialog(QDialog):
         beats = {"石头": "剪刀", "剪刀": "布", "布": "石头"}
         if user_choice == pet_choice:
             result = "draw"
-            message = f"小日和：我也是{pet_choice}，平局。默契还不错嘛。"
+            message = f"角色：我也是{pet_choice}，平局。默契还不错嘛。"
             voice_text = f"你出{user_choice}，我也出{pet_choice}，平局。我们这一下还挺同步的。"
         elif beats[user_choice] == pet_choice:
             result = "win"
-            message = f"小日和：我出{pet_choice}，你赢啦。"
+            message = f"角色：我出{pet_choice}，你赢啦。"
             voice_text = f"你出{user_choice}，我出{pet_choice}，这局你赢啦。我记住了，你这手有点准。"
         else:
             result = "lose"
-            message = f"小日和：我出{pet_choice}，这次是我赢。"
+            message = f"角色：我出{pet_choice}，这次是我赢。"
             voice_text = f"你出{user_choice}，我出{pet_choice}，这次是我赢。下一把再来。"
         self.reward(result, message, voice_text=voice_text)
 
@@ -805,13 +948,13 @@ class MiniGameDialog(QDialog):
         if option == preferred:
             self.reward(
                 "win",
-                f"小日和：对，就是「{option}」。你还挺懂我的。",
+                f"角色：对，就是「{option}」。你还挺懂我的。",
                 voice_text=f"刚才这题是，{question}。你选的是{option}，我心里想的也是{preferred}。被你猜中我会有点开心。",
             )
         else:
             self.reward(
                 "draw",
-                f"小日和：你选「{option}」也说得通，不过我刚才想的是「{preferred}」。",
+                f"角色：你选「{option}」也说得通，不过我刚才想的是「{preferred}」。",
                 voice_text=f"刚才这题是，{question}。你选的是{option}，也说得通，不过我心里想的是{preferred}。",
             )
         self.sync_question = random.choice(

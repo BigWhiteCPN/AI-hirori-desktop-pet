@@ -338,6 +338,11 @@ class RoomModeMixin:
                 return
             if now - self.room_last_motion_at < 9.0:
                 return
+            try:
+                if not self.model.IsMotionFinished():
+                    return
+            except Exception:
+                pass
             motion_keys = {
                 "writing": "m01_thinking",
                 "planning": "m02_question_smile",
