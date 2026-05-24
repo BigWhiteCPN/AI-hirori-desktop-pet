@@ -207,8 +207,8 @@ class QwenTTSEngine:
         xvec_only: bool = False,
         do_sample: bool = False,
         seed: int = 24681357,
-        temperature: float = 0.45,
-        top_p: float = 0.75,
+        temperature: float = 1.0,
+        top_p: float = 0.9,
         model_id: str = DEFAULT_QWEN_TTS_MODEL_ID,
         auto_download: bool = True,
         device: str = "cuda",
@@ -226,8 +226,8 @@ class QwenTTSEngine:
         self.xvec_only = bool(xvec_only)
         self.do_sample = bool(do_sample)
         self.seed = int(seed or 0)
-        self.temperature = float(temperature or 0.45)
-        self.top_p = float(top_p or 0.75)
+        self.temperature = float(temperature or 1.0)
+        self.top_p = float(top_p or 0.9)
         self.model_id = str(model_id or DEFAULT_QWEN_TTS_MODEL_ID).strip() or DEFAULT_QWEN_TTS_MODEL_ID
         self.auto_download = bool(auto_download)
         self.device = device

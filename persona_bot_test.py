@@ -2636,8 +2636,8 @@ def main():
                     xvec_only=config_bool(llm_config, "qwen_tts_xvec_only", False),
                     do_sample=config_bool(llm_config, "qwen_tts_do_sample", False),
                     seed=int(llm_config.get("qwen_tts_seed", 24681357) or 24681357),
-                    temperature=float(llm_config.get("qwen_tts_temperature", 0.45) or 0.45),
-                    top_p=float(llm_config.get("qwen_tts_top_p", 0.75) or 0.75),
+                    temperature=float(llm_config.get("qwen_tts_temperature", 1.0) or 1.0),
+                    top_p=float(llm_config.get("qwen_tts_top_p", 0.9) or 0.9),
                     model_id=str(llm_config.get("qwen_tts_model_id") or DEFAULT_QWEN_TTS_MODEL_ID),
                     auto_download=config_bool(llm_config, "qwen_tts_auto_download", True),
                 )
@@ -2666,8 +2666,8 @@ def main():
                 xvec_only=config_bool(llm_config, "qwen_tts_xvec_only", False),
                 do_sample=config_bool(llm_config, "qwen_tts_do_sample", False),
                 seed=int(llm_config.get("qwen_tts_seed", 24681357) or 24681357),
-                temperature=float(llm_config.get("qwen_tts_temperature", 0.45) or 0.45),
-                top_p=float(llm_config.get("qwen_tts_top_p", 0.75) or 0.75),
+                temperature=float(llm_config.get("qwen_tts_temperature", 1.0) or 1.0),
+                top_p=float(llm_config.get("qwen_tts_top_p", 0.9) or 0.9),
                 model_id=str(llm_config.get("qwen_tts_model_id") or DEFAULT_QWEN_TTS_MODEL_ID),
                 auto_download=config_bool(llm_config, "qwen_tts_auto_download", True),
             )

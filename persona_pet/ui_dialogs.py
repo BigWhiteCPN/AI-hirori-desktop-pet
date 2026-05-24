@@ -821,7 +821,7 @@ class LocalTTSSettingsDialog(QDialog):
         title.setObjectName("titleLabel")
         layout.addWidget(title)
 
-        hint = QLabel("保存后立即写入当前配置；下一句本地流式语音会使用新参数。默认值：temperature 0.45，top_p 0.75，chunk 16。")
+        hint = QLabel("保存后立即写入当前配置；下一句本地流式语音会使用新参数。默认值：temperature 1.0，top_p 0.9，chunk 16。")
         hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -835,14 +835,14 @@ class LocalTTSSettingsDialog(QDialog):
         self.temperature_spin.setRange(0.05, 1.20)
         self.temperature_spin.setSingleStep(0.05)
         self.temperature_spin.setDecimals(2)
-        self.temperature_spin.setValue(self._float_value("qwen_tts_temperature", 0.45))
+        self.temperature_spin.setValue(self._float_value("qwen_tts_temperature", 1.0))
         form.addRow("temperature", self.temperature_spin)
 
         self.top_p_spin = QDoubleSpinBox()
         self.top_p_spin.setRange(0.10, 1.00)
         self.top_p_spin.setSingleStep(0.05)
         self.top_p_spin.setDecimals(2)
-        self.top_p_spin.setValue(self._float_value("qwen_tts_top_p", 0.75))
+        self.top_p_spin.setValue(self._float_value("qwen_tts_top_p", 0.9))
         form.addRow("top_p", self.top_p_spin)
 
         self.chunk_size_spin = QSpinBox()
@@ -882,8 +882,8 @@ class LocalTTSSettingsDialog(QDialog):
             return int(fallback)
 
     def _reset_defaults(self):
-        self.temperature_spin.setValue(0.45)
-        self.top_p_spin.setValue(0.75)
+        self.temperature_spin.setValue(1.0)
+        self.top_p_spin.setValue(0.9)
         self.chunk_size_spin.setValue(16)
 
     def values(self):

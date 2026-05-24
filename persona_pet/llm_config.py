@@ -181,8 +181,8 @@ def build_default_llm_config(
         "qwen_tts_xvec_only": False,
         "qwen_tts_do_sample": False,
         "qwen_tts_seed": 24681357,
-        "qwen_tts_temperature": 0.45,
-        "qwen_tts_top_p": 0.75,
+        "qwen_tts_temperature": 1.0,
+        "qwen_tts_top_p": 0.9,
         "qwen_tts_stream_chunk_size": 16,
         "qwen_tts_emotion": "neutral",
         "interaction_gaze_radius_px": 320.0,
@@ -285,8 +285,8 @@ def migrate_llm_config(raw, defaults):
     data["volcengine_tts_pitch_ratio"] = _clamp_number(data.get("volcengine_tts_pitch_ratio"), 1.0, 0.5, 2.0, float)
     data["singing_max_text_chars"] = int(_clamp_number(data.get("singing_max_text_chars"), defaults.get("singing_max_text_chars", 72), 12, 240, int))
     data["qwen_tts_seed"] = int(_clamp_number(data.get("qwen_tts_seed"), defaults.get("qwen_tts_seed", 24681357), 0, 2**31 - 1, int))
-    data["qwen_tts_temperature"] = _clamp_number(data.get("qwen_tts_temperature"), defaults.get("qwen_tts_temperature", 0.45), 0.05, 1.2, float)
-    data["qwen_tts_top_p"] = _clamp_number(data.get("qwen_tts_top_p"), defaults.get("qwen_tts_top_p", 0.75), 0.1, 1.0, float)
+    data["qwen_tts_temperature"] = _clamp_number(data.get("qwen_tts_temperature"), defaults.get("qwen_tts_temperature", 1.0), 0.05, 1.2, float)
+    data["qwen_tts_top_p"] = _clamp_number(data.get("qwen_tts_top_p"), defaults.get("qwen_tts_top_p", 0.9), 0.1, 1.0, float)
     data["qwen_tts_stream_chunk_size"] = int(_clamp_number(data.get("qwen_tts_stream_chunk_size"), defaults.get("qwen_tts_stream_chunk_size", 16), 8, 32, int))
     data["interaction_gaze_radius_px"] = _clamp_number(data.get("interaction_gaze_radius_px"), defaults.get("interaction_gaze_radius_px", 320.0), 120.0, 900.0, float)
     data["interaction_stare_threshold_sec"] = _clamp_number(data.get("interaction_stare_threshold_sec"), defaults.get("interaction_stare_threshold_sec", 45.0), 10.0, 180.0, float)
