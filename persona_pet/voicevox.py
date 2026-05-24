@@ -542,8 +542,8 @@ class VoicevoxController:
                 xvec_only=config_bool(self.config, "qwen_tts_xvec_only", False),
                 do_sample=config_bool(self.config, "qwen_tts_do_sample", False),
                 seed=int(self.config.get("qwen_tts_seed", 24681357) or 24681357),
-                temperature=float(self.config.get("qwen_tts_temperature", 0.55) or 0.55),
-                top_p=float(self.config.get("qwen_tts_top_p", 0.85) or 0.85),
+                temperature=float(self.config.get("qwen_tts_temperature", 0.45) or 0.45),
+                top_p=float(self.config.get("qwen_tts_top_p", 0.75) or 0.75),
                 model_id=str(self.config.get("qwen_tts_model_id") or DEFAULT_QWEN_TTS_MODEL_ID),
                 auto_download=config_bool(self.config, "qwen_tts_auto_download", True),
                 runtime=self.runtime,
@@ -558,8 +558,8 @@ class VoicevoxController:
                 xvec_only=config_bool(self.config, "qwen_tts_xvec_only", False),
                 do_sample=config_bool(self.config, "qwen_tts_do_sample", False),
                 seed=int(self.config.get("qwen_tts_seed", 24681357) or 24681357),
-                temperature=float(self.config.get("qwen_tts_temperature", 0.55) or 0.55),
-                top_p=float(self.config.get("qwen_tts_top_p", 0.85) or 0.85),
+                temperature=float(self.config.get("qwen_tts_temperature", 0.45) or 0.45),
+                top_p=float(self.config.get("qwen_tts_top_p", 0.75) or 0.75),
                 model_id=str(self.config.get("qwen_tts_model_id") or DEFAULT_QWEN_TTS_MODEL_ID),
                 auto_download=config_bool(self.config, "qwen_tts_auto_download", True),
             )
@@ -1291,7 +1291,7 @@ class VoicevoxController:
         if not text:
             return False
 
-        chunk_size = int(self.config.get("qwen_tts_stream_chunk_size", 12) or 12)
+        chunk_size = int(self.config.get("qwen_tts_stream_chunk_size", 16) or 16)
         chunk_size = max(8, min(32, chunk_size))
         chunk_count = 0
         for index, (audio_chunk, sr, _timing) in enumerate(

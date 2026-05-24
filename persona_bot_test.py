@@ -111,7 +111,7 @@ from persona_pet.touch_zone_config import (
     save_touch_zone_config,
     touch_zone_label,
 )
-from persona_pet.ui_dialogs import ApiSettingsDialog, FirstRunDialog, MiniGameDialog
+from persona_pet.ui_dialogs import ApiSettingsDialog, FirstRunDialog, LocalTTSSettingsDialog, MiniGameDialog
 from persona_pet.user_profile import UserProfileMixin
 from persona_pet.voicevox import VoicevoxController
 from persona_pet.voicevox import config_bool
@@ -1837,7 +1837,8 @@ class Live2DDesktopPet(
             ("Enter", "播放当前测试文本"),
             ("L", "监听者逐句测试"),
             ("Shift+P", "说话测试"),
-            ("S / F3", "打开 API 设置"),
+            ("S", "本地 TTS 调参"),
+            ("F3", "打开 API 设置"),
             ("F6", "触摸分区检查叠层开关"),
             ("R", "随机待机动作"),
             ("ESC", "退出"),
@@ -1932,8 +1933,6 @@ class Live2DDesktopPet(
         try:
             save_llm_config(new_config)
         except Exception as exc:
-            self.show_chat_status("API 璁剧疆淇濆瓨澶辫触", seconds=3.0)
-            self.show_chat_status("API 设置保存失败", seconds=3.0)
             self.show_chat_status("API 设置保存失败", seconds=3.0)
             print("API_SETTINGS_SAVE_ERROR =", exc)
             return
@@ -1971,6 +1970,37 @@ class Live2DDesktopPet(
                 "tts_provider": self.llm_config.get("tts_provider"),
                 "voice_type": self.llm_config.get("volcengine_tts_voice_type"),
                 "cluster": self.llm_config.get("volcengine_tts_cluster"),
+            },
+        )
+
+    def open_local_tts_settings_dialog(self):
+        dialog = LocalTTSSettingsDialog(self.llm_config, self, default_config=DEFAULT_LLM_CONFIG)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        new_config = dialog.values()
+        try:
+            save_llm_config(new_config)
+        except Exception as exc:
+            self.show_chat_status("本地 TTS 参数保存失败", seconds=3.0)
+            print("LOCAL_TTS_SETTINGS_SAVE_ERROR =", exc)
+            return
+        self.llm_config = dict(new_config)
+        self.voice.update_config(self.llm_config)
+        self.show_chat_status(
+            (
+                "本地 TTS 参数已保存："
+                f"temp={self.llm_config.get('qwen_tts_temperature')}, "
+                f"top_p={self.llm_config.get('qwen_tts_top_p')}, "
+                f"chunk={self.llm_config.get('qwen_tts_stream_chunk_size')}"
+            ),
+            seconds=3.0,
+        )
+        print(
+            "LOCAL_TTS_SETTINGS_SAVED =",
+            {
+                "temperature": self.llm_config.get("qwen_tts_temperature"),
+                "top_p": self.llm_config.get("qwen_tts_top_p"),
+                "chunk_size": self.llm_config.get("qwen_tts_stream_chunk_size"),
             },
         )
 
@@ -2181,8 +2211,8 @@ class Live2DDesktopPet(
             return
 
         if event.key() == Qt.Key_S:
-            self.open_api_settings_dialog()
-            self.show_chat_status("已打开 API 设置面板。", seconds=2.0)
+            self.open_local_tts_settings_dialog()
+            self.show_chat_status("已打开本地 TTS 调参面板。", seconds=2.0)
             return
 
         if event.key() in TEST_TEXTS:
@@ -2606,8 +2636,8 @@ def main():
                     xvec_only=config_bool(llm_config, "qwen_tts_xvec_only", False),
                     do_sample=config_bool(llm_config, "qwen_tts_do_sample", False),
                     seed=int(llm_config.get("qwen_tts_seed", 24681357) or 24681357),
-                    temperature=float(llm_config.get("qwen_tts_temperature", 0.55) or 0.55),
-                    top_p=float(llm_config.get("qwen_tts_top_p", 0.85) or 0.85),
+                    temperature=float(llm_config.get("qwen_tts_temperature", 0.45) or 0.45),
+                    top_p=float(llm_config.get("qwen_tts_top_p", 0.75) or 0.75),
                     model_id=str(llm_config.get("qwen_tts_model_id") or DEFAULT_QWEN_TTS_MODEL_ID),
                     auto_download=config_bool(llm_config, "qwen_tts_auto_download", True),
                 )
@@ -2636,8 +2666,8 @@ def main():
                 xvec_only=config_bool(llm_config, "qwen_tts_xvec_only", False),
                 do_sample=config_bool(llm_config, "qwen_tts_do_sample", False),
                 seed=int(llm_config.get("qwen_tts_seed", 24681357) or 24681357),
-                temperature=float(llm_config.get("qwen_tts_temperature", 0.55) or 0.55),
-                top_p=float(llm_config.get("qwen_tts_top_p", 0.85) or 0.85),
+                temperature=float(llm_config.get("qwen_tts_temperature", 0.45) or 0.45),
+                top_p=float(llm_config.get("qwen_tts_top_p", 0.75) or 0.75),
                 model_id=str(llm_config.get("qwen_tts_model_id") or DEFAULT_QWEN_TTS_MODEL_ID),
                 auto_download=config_bool(llm_config, "qwen_tts_auto_download", True),
             )
@@ -2717,7 +2747,7 @@ def main():
     print("按 L 开始监听者逐句测试；按 Shift+P 开始说话测试。")
     print("按 V 开启自由语音监听；按 N 关闭；按 B/M/J/G 可打开主要功能面板；F2 也可快速启动语音输入。")
     print("按 P 触发亲密作弊码；按 Shift+E 恢复能量。")
-    print("键盘快捷支持打开 API 设置面板，可用 F3 或 S。")
+    print("按 S 打开本地 TTS 调参面板；按 F3 打开 API 设置面板。")
     print("顶部输入框支持直接打字，也支持语音输入；按 C 可聚焦输入框。")
     print(f"LLM 配置文件：{LLM_CONFIG_PATH}")
     print("按 R 随机切换一个待机动作；按 ESC 退出。")

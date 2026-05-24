@@ -20,6 +20,8 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QDoubleSpinBox,
+    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -758,6 +760,139 @@ class ApiSettingsDialog(QDialog):
             data["volcengine_tts_token"] = data.get("volcengine_tts_api_key", "")
         data["speech_provider"] = self.asr_provider_combo.currentData()
         return data
+
+
+class LocalTTSSettingsDialog(QDialog):
+    def __init__(self, config, parent=None, default_config=None):
+        super().__init__(parent)
+        self.config = dict(config or {})
+        self.default_config = dict(default_config or {})
+        self.setWindowTitle("本地 TTS 调参")
+        self.setModal(True)
+        self.resize(420, 260)
+        self.setMinimumWidth(380)
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #fff6fb;
+                color: #543247;
+                font: 10pt "Microsoft YaHei UI";
+            }
+            QLabel#titleLabel {
+                color: #8f2d5a;
+                font: 15pt "Microsoft YaHei UI";
+                font-weight: 700;
+            }
+            QLabel#hintLabel {
+                color: #8a6178;
+                line-height: 140%;
+            }
+            QDoubleSpinBox, QSpinBox {
+                min-height: 30px;
+                padding: 3px 8px;
+                border: 1px solid rgba(225, 135, 180, 210);
+                border-radius: 8px;
+                background: rgba(255, 255, 255, 245);
+                color: #513247;
+            }
+            QDialogButtonBox QPushButton, QPushButton {
+                min-width: 88px;
+                min-height: 30px;
+                border-radius: 8px;
+                border: 1px solid rgba(210, 98, 152, 220);
+                padding: 4px 14px;
+                background: #ffffff;
+                color: #8f2d5a;
+                font-weight: 600;
+            }
+            QDialogButtonBox QPushButton:default {
+                background: #e866a3;
+                color: white;
+                border-color: #d94e91;
+            }
+            """
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("本地 TTS 调参")
+        title.setObjectName("titleLabel")
+        layout.addWidget(title)
+
+        hint = QLabel("保存后立即写入当前配置；下一句本地流式语音会使用新参数。默认值：temperature 0.45，top_p 0.75，chunk 16。")
+        hint.setObjectName("hintLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(10)
+
+        self.temperature_spin = QDoubleSpinBox()
+        self.temperature_spin.setRange(0.05, 1.20)
+        self.temperature_spin.setSingleStep(0.05)
+        self.temperature_spin.setDecimals(2)
+        self.temperature_spin.setValue(self._float_value("qwen_tts_temperature", 0.45))
+        form.addRow("temperature", self.temperature_spin)
+
+        self.top_p_spin = QDoubleSpinBox()
+        self.top_p_spin.setRange(0.10, 1.00)
+        self.top_p_spin.setSingleStep(0.05)
+        self.top_p_spin.setDecimals(2)
+        self.top_p_spin.setValue(self._float_value("qwen_tts_top_p", 0.75))
+        form.addRow("top_p", self.top_p_spin)
+
+        self.chunk_size_spin = QSpinBox()
+        self.chunk_size_spin.setRange(8, 32)
+        self.chunk_size_spin.setSingleStep(2)
+        self.chunk_size_spin.setValue(self._int_value("qwen_tts_stream_chunk_size", 16))
+        form.addRow("stream chunk", self.chunk_size_spin)
+
+        layout.addLayout(form)
+
+        reset_button = QPushButton("恢复默认")
+        reset_button.clicked.connect(self._reset_defaults)
+        layout.addWidget(reset_button, alignment=Qt.AlignLeft)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        save_button = buttons.button(QDialogButtonBox.Save)
+        cancel_button = buttons.button(QDialogButtonBox.Cancel)
+        if save_button:
+            save_button.setText("保存")
+            save_button.setDefault(True)
+        if cancel_button:
+            cancel_button.setText("取消")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _float_value(self, key, fallback):
+        try:
+            return float(self.config.get(key, self.default_config.get(key, fallback)) or fallback)
+        except Exception:
+            return float(fallback)
+
+    def _int_value(self, key, fallback):
+        try:
+            return int(self.config.get(key, self.default_config.get(key, fallback)) or fallback)
+        except Exception:
+            return int(fallback)
+
+    def _reset_defaults(self):
+        self.temperature_spin.setValue(0.45)
+        self.top_p_spin.setValue(0.75)
+        self.chunk_size_spin.setValue(16)
+
+    def values(self):
+        data = dict(self.config)
+        data["qwen_tts_temperature"] = round(float(self.temperature_spin.value()), 2)
+        data["qwen_tts_top_p"] = round(float(self.top_p_spin.value()), 2)
+        data["qwen_tts_stream_chunk_size"] = int(self.chunk_size_spin.value())
+        return data
+
 
 class MiniGameDialog(QDialog):
     def __init__(self, parent_pet):
