@@ -116,8 +116,9 @@ class TimeAwareness:
         if self.first_interaction_date:
             try:
                 first = datetime.strptime(self.first_interaction_date, "%Y-%m-%d")
-                days_together = (now - first).days
+                days_together = max(0, (now - first).days)
                 context["days_together"] = days_together
+                context["first_interaction_date"] = self.first_interaction_date
                 if days_together >= 365:
                     context["anniversary"] = f"认识{days_together // 365}年"
                 elif days_together >= 30:
@@ -139,8 +140,12 @@ class TimeAwareness:
             lines.append(f"今天是{ctx['special_day']}，可以自然地提一下。")
         if ctx.get("personal_special_day"):
             lines.append(f"今天是你们的{ctx['personal_special_day']}，对她来说有特别的意义。")
-        if ctx.get("days_together"):
+        if ctx.get("first_interaction_date"):
             days = ctx["days_together"]
+            lines.append(
+                f"第一次互动日期：{ctx['first_interaction_date']}；按当前日期计算，你们认识{days}天。"
+                "如果用户问“认识多久了”，必须按这个数字回答；0天表示今天刚认识，不要猜成几天前。"
+            )
             if days >= 100:
                 lines.append(f"你们已经认识{days}天了。")
         if ctx.get("consecutive_days", 0) >= 3:

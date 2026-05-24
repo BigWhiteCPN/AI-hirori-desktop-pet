@@ -441,6 +441,7 @@ class LLMClient:
 
     def direct_state_reply(self, user_text):
         for builder in (
+            self.direct_relationship_duration_reply,
             self.direct_time_reply,
             self.direct_body_reply,
             self.direct_calendar_cycle_reply,
@@ -451,6 +452,43 @@ class LLMClient:
                 print("LLM_DIRECT_STATE_REPLY =", {"user": user_text, "reply": payload.get("zh", "")})
                 return payload
         return None
+
+    def direct_relationship_duration_reply(self, user_text):
+        compact = re.sub(r"\s+", "", user_text or "")
+        if not compact:
+            return None
+        asks_duration = any(term in compact for term in ("认识多久", "認識多久", "认识多长时间", "认识几天", "认识多少天", "相识多久", "相識多久"))
+        asks_us = any(term in compact for term in ("我们", "我們", "咱们", "咱們", "你和我", "我和你"))
+        if not asks_duration or not asks_us:
+            return None
+
+        import datetime
+
+        today = datetime.date.today()
+        first_date_text = ""
+        if hasattr(self, "_time_awareness") and self._time_awareness is not None:
+            first_date_text = str(getattr(self._time_awareness, "first_interaction_date", "") or "").strip()
+            if not first_date_text:
+                try:
+                    self._time_awareness.record_interaction()
+                    first_date_text = str(getattr(self._time_awareness, "first_interaction_date", "") or "").strip()
+                except Exception:
+                    first_date_text = ""
+
+        first_date = today
+        if first_date_text:
+            try:
+                first_date = datetime.datetime.strptime(first_date_text, "%Y-%m-%d").date()
+            except Exception:
+                first_date = today
+        days = max(0, (today - first_date).days)
+        if days == 0:
+            text = "按我的记忆记录，我们是今天刚认识的，还不到一天。刚才我如果说成好几天，那是我把时间线说错了。"
+        elif days == 1:
+            text = f"按我的记忆记录，我们是{first_date.month}月{first_date.day}日第一次互动的，到今天算认识1天。"
+        else:
+            text = f"按我的记忆记录，我们是{first_date.month}月{first_date.day}日第一次互动的，到今天算认识{days}天。"
+        return self.direct_payload(text, tone="soft")
 
     def direct_time_reply(self, user_text):
         compact = re.sub(r"\s+", "", user_text or "")
