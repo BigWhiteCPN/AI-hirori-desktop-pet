@@ -5,10 +5,17 @@ import time
 
 
 class MouseTracker:
-    def __init__(self, gaze_radius_px=500, stare_threshold_sec=15.0, movement_threshold_px=5.0):
+    def __init__(
+        self,
+        gaze_radius_px=320,
+        stare_threshold_sec=45.0,
+        movement_threshold_px=5.0,
+        stare_focus_threshold=0.78,
+    ):
         self.gaze_radius_px = float(gaze_radius_px)
         self.stare_threshold_sec = float(stare_threshold_sec)
         self.movement_threshold_px = float(movement_threshold_px)
+        self.stare_focus_threshold = max(0.35, min(0.98, float(stare_focus_threshold)))
         self.range_feather_px = max(48.0, min(160.0, self.gaze_radius_px * 0.26))
         self.deadzone = 0.035
         self._cursor_abs = None
@@ -19,6 +26,7 @@ class MouseTracker:
         self._stare_notified = False
         self._last_update_at = 0.0
         self._focus_strength = 0.0
+        self._motion_focus_strength = 0.0
         self._entry_warmup = 0.0  # 0-1 ramp for first-time entry into gaze range
 
     def update(self, cursor_global_x, cursor_global_y, window_x, window_y, window_w, window_h):
@@ -37,6 +45,7 @@ class MouseTracker:
         self._relative = (self._apply_deadzone(rx), self._apply_deadzone(ry))
         target_focus = self._distance_focus(dist)
         focus_active = target_focus > 0.02
+        stare_active = target_focus >= self.stare_focus_threshold
         self._in_range = target_focus >= 0.28
 
         # Entry warmup: when focus was near-zero and target is now active,
@@ -54,6 +63,8 @@ class MouseTracker:
 
         focus_alpha = min(1.0, dt * (5.0 if target_focus > self._focus_strength else 4.8))
         self._focus_strength += (effective_focus - self._focus_strength) * focus_alpha
+        motion_alpha = min(1.0, dt * (1.55 if self._focus_strength > self._motion_focus_strength else 2.4))
+        self._motion_focus_strength += (self._focus_strength - self._motion_focus_strength) * motion_alpha
 
         # Position smoothing: slow down during entry warmup to let focus build first
         entry_slow = 1.0 if self._entry_warmup >= 0.9 else self._entry_warmup
@@ -72,7 +83,7 @@ class MouseTracker:
             move_dist = math.hypot(new_pos[0] - prev[0], new_pos[1] - prev[1])
         self._cursor_abs = new_pos
 
-        if not focus_active:
+        if not stare_active:
             self._stare_start = 0.0
             self._stare_notified = False
             return
@@ -85,6 +96,8 @@ class MouseTracker:
 
     def consume_stare_event(self):
         if not self._in_range or self._stare_notified or self._stare_start <= 0.0:
+            return None
+        if self._focus_strength < self.stare_focus_threshold * 0.85:
             return None
         duration = time.monotonic() - self._stare_start
         if duration < self.stare_threshold_sec:
@@ -115,6 +128,10 @@ class MouseTracker:
     @property
     def focus_strength(self):
         return float(max(0.0, min(1.0, self._focus_strength)))
+
+    @property
+    def motion_focus_strength(self):
+        return float(max(0.0, min(1.0, self._motion_focus_strength)))
 
     def get_gaze_blend(self, emotion_eye_x, emotion_eye_y, blend=0.7):
         if self._focus_strength <= 0.001:

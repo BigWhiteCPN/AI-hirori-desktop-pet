@@ -185,6 +185,10 @@ def build_default_llm_config(
         "qwen_tts_top_p": 0.85,
         "qwen_tts_stream_chunk_size": 12,
         "qwen_tts_emotion": "neutral",
+        "interaction_gaze_radius_px": 320.0,
+        "interaction_stare_threshold_sec": 45.0,
+        "interaction_stare_focus_threshold": 0.78,
+        "interaction_stare_cooldown_seconds": 240.0,
         "godot_project_dir": "",
         "godot_executable": "",
         "home_icon_idle_seconds": 600.0,
@@ -280,7 +284,14 @@ def migrate_llm_config(raw, defaults):
     data["volcengine_tts_volume_ratio"] = _clamp_number(data.get("volcengine_tts_volume_ratio"), 1.0, 0.2, 2.0, float)
     data["volcengine_tts_pitch_ratio"] = _clamp_number(data.get("volcengine_tts_pitch_ratio"), 1.0, 0.5, 2.0, float)
     data["singing_max_text_chars"] = int(_clamp_number(data.get("singing_max_text_chars"), defaults.get("singing_max_text_chars", 72), 12, 240, int))
-    data["qwen_tts_stream_chunk_size"] = int(_clamp_number(data.get("qwen_tts_stream_chunk_size"), defaults.get("qwen_tts_stream_chunk_size", 12), 4, 32, int))
+    data["qwen_tts_seed"] = int(_clamp_number(data.get("qwen_tts_seed"), defaults.get("qwen_tts_seed", 24681357), 0, 2**31 - 1, int))
+    data["qwen_tts_temperature"] = _clamp_number(data.get("qwen_tts_temperature"), defaults.get("qwen_tts_temperature", 0.55), 0.05, 1.2, float)
+    data["qwen_tts_top_p"] = _clamp_number(data.get("qwen_tts_top_p"), defaults.get("qwen_tts_top_p", 0.85), 0.1, 1.0, float)
+    data["qwen_tts_stream_chunk_size"] = int(_clamp_number(data.get("qwen_tts_stream_chunk_size"), defaults.get("qwen_tts_stream_chunk_size", 12), 8, 32, int))
+    data["interaction_gaze_radius_px"] = _clamp_number(data.get("interaction_gaze_radius_px"), defaults.get("interaction_gaze_radius_px", 320.0), 120.0, 900.0, float)
+    data["interaction_stare_threshold_sec"] = _clamp_number(data.get("interaction_stare_threshold_sec"), defaults.get("interaction_stare_threshold_sec", 45.0), 10.0, 180.0, float)
+    data["interaction_stare_focus_threshold"] = _clamp_number(data.get("interaction_stare_focus_threshold"), defaults.get("interaction_stare_focus_threshold", 0.78), 0.35, 0.98, float)
+    data["interaction_stare_cooldown_seconds"] = _clamp_number(data.get("interaction_stare_cooldown_seconds"), defaults.get("interaction_stare_cooldown_seconds", 240.0), 30.0, 1800.0, float)
 
     for key in (
         "base_url",

@@ -302,7 +302,7 @@ class PetRenderMixin:
 
             base_params = emotion_to_params(mixed_analysis)
             tracker = getattr(self, "mouse_tracker", None)
-            attention = float(getattr(tracker, "focus_strength", 0.0) or 0.0) if tracker is not None else 0.0
+            attention = float(getattr(tracker, "motion_focus_strength", 0.0) or 0.0) if tracker is not None else 0.0
             overlay_params = self.behavior.update(self.model, attention=attention)
             final_params = compose_params(base_params, overlay_params)
             apply_params(self.model, final_params)
@@ -557,23 +557,25 @@ class PetRenderMixin:
                 if now - last_stop_at >= 1.0 and hasattr(self, "behavior"):
                     self._last_attention_motion_stop_at = now
                     self.behavior.next_idle_motion_at = max(self.behavior.next_idle_motion_at, now + 1.2)
-            engagement = tracker.focus_strength
-            if not in_range and engagement <= 0.001:
+            eye_engagement = tracker.focus_strength
+            motion_engagement = float(getattr(tracker, "motion_focus_strength", eye_engagement) or 0.0)
+            motion_engagement = min(eye_engagement, max(0.0, min(1.0, motion_engagement)))
+            if not in_range and eye_engagement <= 0.001:
                 return {}
             eye_x = final_params.get(StandardParams.ParamEyeBallX, 0.0)
             eye_y = final_params.get(StandardParams.ParamEyeBallY, 0.0)
             gaze_x, gaze_y = tracker.get_gaze_blend(eye_x, eye_y, blend=0.985)
             late_params[StandardParams.ParamEyeBallX] = gaze_x
             late_params[StandardParams.ParamEyeBallY] = gaze_y
-            if engagement > 0.001:
+            if eye_engagement > 0.001:
                 mx = tracker.smoothed_x
                 my = tracker.smoothed_y
                 # Late-apply only gaze-related parameters, so Live2D motions keep
                 # their body/arm continuity underneath the attention layer.
-                late_params[StandardParams.ParamEyeBallX] = final_params.get(StandardParams.ParamEyeBallX, 0.0) * (1.0 - 0.92 * engagement) + mx * 1.42 * engagement
-                late_params[StandardParams.ParamEyeBallY] = final_params.get(StandardParams.ParamEyeBallY, 0.0) * (1.0 - 0.92 * engagement) + (-my) * 1.34 * engagement
-                late_params[StandardParams.ParamAngleX] = final_params.get(StandardParams.ParamAngleX, 0.0) * (1.0 - 0.62 * engagement) + mx * 16.0 * engagement
-                late_params[StandardParams.ParamAngleY] = final_params.get(StandardParams.ParamAngleY, 0.0) * (1.0 - 0.62 * engagement) + (-my) * 11.5 * engagement
+                late_params[StandardParams.ParamEyeBallX] = final_params.get(StandardParams.ParamEyeBallX, 0.0) * (1.0 - 0.92 * eye_engagement) + mx * 1.42 * eye_engagement
+                late_params[StandardParams.ParamEyeBallY] = final_params.get(StandardParams.ParamEyeBallY, 0.0) * (1.0 - 0.92 * eye_engagement) + (-my) * 1.34 * eye_engagement
+                late_params[StandardParams.ParamAngleX] = final_params.get(StandardParams.ParamAngleX, 0.0) * (1.0 - 0.62 * motion_engagement) + mx * 16.0 * motion_engagement
+                late_params[StandardParams.ParamAngleY] = final_params.get(StandardParams.ParamAngleY, 0.0) * (1.0 - 0.62 * motion_engagement) + (-my) * 11.5 * motion_engagement
         except Exception:
             pass
         return late_params
@@ -588,16 +590,21 @@ class PetRenderMixin:
         duration = tracker.consume_stare_event()
         if duration is None:
             return False
+        config = getattr(self, "llm_config", {}) or {}
+        try:
+            cooldown_seconds = float(config.get("interaction_stare_cooldown_seconds", 240.0) or 240.0)
+        except Exception:
+            cooldown_seconds = 240.0
         stimulus = Stimulus(
             type="stare",
-            intensity=0.35,
+            intensity=0.28,
             emotion_hint="surprise",
             duration=duration,
             source="mouse",
-            memory_worthy=True,
+            memory_worthy=False,
             should_talk=True,
             cooldown_key="stare",
-            meta={"cooldown_seconds": 90.0},
+            meta={"cooldown_seconds": cooldown_seconds},
         )
         return dispatcher.submit(stimulus)
 

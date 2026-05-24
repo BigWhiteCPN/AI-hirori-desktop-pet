@@ -11,7 +11,7 @@ class StimulusDispatcher(QObject):
     DEFAULT_COOLDOWNS = {
         "touch": 0.4,
         "touch_dialogue": 6.0,
-        "stare": 90.0,
+        "stare": 240.0,
         "drag": 2.0,
         "env_change": 60.0,
         "work_overtime": 1800.0,

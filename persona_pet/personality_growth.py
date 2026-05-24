@@ -122,7 +122,9 @@ class PersonalityGrowth:
         relation_score = float(stimulus.meta.get("relationship_score", 28.0) or 28.0)
         if stimulus_type != "touch":
             if stimulus_type == "stare":
-                self.record_experience("user_listened_patiently", magnitude=0.3)
+                duration = float(getattr(stimulus, "duration", 0.0) or 0.0)
+                if duration >= 90.0:
+                    self.record_experience("user_listened_patiently", magnitude=0.2)
             return
         if reaction_name in ("happy", "shy"):
             self.record_experience("user_was_gentle", magnitude=0.35 if zone == "hair" else 0.25)

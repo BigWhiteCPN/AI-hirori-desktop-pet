@@ -1291,7 +1291,8 @@ class VoicevoxController:
         if not text:
             return False
 
-        chunk_size = int(self.config.get("qwen_tts_stream_chunk_size", 8) or 8)
+        chunk_size = int(self.config.get("qwen_tts_stream_chunk_size", 12) or 12)
+        chunk_size = max(8, min(32, chunk_size))
         chunk_count = 0
         for index, (audio_chunk, sr, _timing) in enumerate(
             engine.stream_synthesize_chunks(
