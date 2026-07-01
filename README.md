@@ -1,6 +1,28 @@
 # AI Hiyori Desktop Pet
 
-这是一个本地运行的 Live2D AI 桌宠项目，包含对话、语音输入、TTS、记忆、主动行为、小屋模式和城市地图。
+本地运行的 Live2D AI 桌宠项目。它不是一个单纯聊天窗口，而是一个会停留在桌面上的角色：能对话、听语音、合成语音、记忆互动、主动行为，也有小屋模式、城市地图和一些桌面代理能力。
+
+<p align="center">
+  <img src="docs/readme-assets/hiyori-code-banner.png" alt="AI Hiyori code character banner" width="100%">
+</p>
+
+<p align="center">
+  <img src="docs/readme-assets/hiyori-desktop-preview.png" alt="AI Hiyori 桌宠运行截图" width="360">
+</p>
+
+## 这是什么
+
+AI Hiyori Desktop Pet 是一个中文优先的本地桌宠实验项目。目标不是把 AI 塞进一个普通输入框，而是让一个 Live2D 角色长期停留在桌面上，围绕“陪伴、记忆、语音、主动反馈、轻量代理”形成一个可迭代的 AI 角色系统。
+
+核心能力：
+
+- Live2D 桌面角色显示和交互
+- 文本对话、语音输入、TTS 语音回复
+- 角色心情、身体状态、主动行为
+- 长期记忆、事件记忆、关系状态
+- 小屋模式、城市地图、道具和轻量玩法
+- OCR 截图问答、Browser Agent、本地文件代理等可选能力
+- 云端 API、本地 Ollama、本地 TTS / ASR 的分层配置
 
 当前更适合的运行平台：
 
@@ -10,25 +32,50 @@
 
 项目目录可以放在任意盘符、任意路径，不要求放在固定目录。仓库内默认只使用相对路径；如果你需要接入外部工具或外部项目，再把那些机器专属路径写到你自己的 `persona_llm_config.json`。
 
-## 第一次接触时先看这个
+## 一键安装 Prompt
 
-如果我是第一次接触这个项目，我会先这样判断自己能不能跑：
+如果你是第一次接触这个项目，不建议先逐条复制固定命令。更推荐把下面这段 Prompt 复制给有终端能力的 AI 助手，例如 Codex、Claude Code、Cursor、ChatGPT Agent 等，让它根据你的电脑环境一步步安装、检查和修复。
 
-- 只有 Windows + DeepSeek key，没有 GPU：可以先跑云端文本对话，但想要稳定语音体验，最好再配 `VOLCENGINE_TTS_API_KEY`
-- 不想用任何 API：首次登录选择“本地 Qwen3 4B Instruct（Ollama）”，先安装 Ollama，程序会把模型缓存到 `third_party/ollama_models`
-- 有 Windows + NVIDIA GPU + CUDA：可以走本地 TTS / 本地 ASR
-- 想用 browser agent：除了安装 Python 包，还要执行 `playwright install chromium`
-- 想用 OCR 截图问答：除了 Python 包，还要安装系统级 Tesseract
+```text
+请帮我在 Windows 上安装并运行这个 GitHub 项目：
+https://github.com/BigWhiteCPN/AI-hirori-desktop-pet
 
-最省事的首次体验路径：
+我的目标是先跑通最小可用版本，不要一开始就安装所有扩展能力。
 
-1. 在 Windows 上克隆仓库
-2. 运行 `setup_persona_bot_test.bat`
-3. 先至少准备 `DEEPSEEK_API_KEY`
-4. 如果你没有本地 GPU TTS 环境，再额外准备 `VOLCENGINE_TTS_API_KEY`
-5. 运行 `run_persona_bot_test.bat`
+请按下面方式执行：
+1. 先检查系统是否适合运行：Windows、Python 3.10+、Git 是否可用。
+2. 如果缺少 Python 或 Git，请先告诉我应该安装什么，不要跳过环境检查。
+3. 克隆仓库到一个普通英文路径，进入项目目录。
+4. 优先运行项目自带的 setup_persona_bot_test.bat。
+5. 如果缺少 persona_llm_config.json，请从 persona_llm_config.release.json 复制一份。
+6. 引导我配置最小可用的 LLM 设置：
+   - 如果我有 DeepSeek API Key，就配置 DEEPSEEK_API_KEY 或 persona_llm_config.json 里的 api_key。
+   - 如果我不想用云端 API，就引导我安装 Ollama，并选择本地 Qwen3 4B Instruct。
+7. 如果我没有 NVIDIA GPU / CUDA，本地 TTS 先不要强行安装；需要语音合成时优先引导我配置 VOLCENGINE_TTS_API_KEY。
+8. 安装完成后运行 run_persona_bot_test.bat。
+9. 如果启动失败，先运行 tools/doctor.py 做环境预检，再根据报错解释原因并给我下一步操作。
+10. 不要把我的 API Key、persona_llm_config.json、.venv、logs、outputs、third_party 提交到 Git。
 
-## 功能矩阵
+请每一步都说明你正在检查什么、为什么这么做；遇到错误时先诊断，不要反复重装全部依赖。
+```
+
+不用 AI 助手时，最省事的首次体验路径仍然是：
+
+1. 在 Windows 上下载或克隆仓库
+2. 双击 `setup_persona_bot_test.bat`
+3. 按提示填写 `persona_llm_config.json`
+4. 至少准备 `DEEPSEEK_API_KEY`，或在首次登录界面选择本地 Ollama 模式
+5. 如果没有本地 GPU TTS 环境，语音合成优先准备 `VOLCENGINE_TTS_API_KEY`
+6. 双击 `run_persona_bot_test.bat`
+
+`setup_persona_bot_test.bat` 会做这些事：
+
+- 创建 `.venv`
+- 安装 `requirements_core.txt`
+- 如果缺少 `persona_llm_config.json`，就从 `persona_llm_config.release.json` 复制一份
+- 运行 `tools/doctor.py` 做环境预检
+
+## 先判断自己适合哪种配置
 
 | 你的条件 | 推荐配置 | 能力范围 |
 | --- | --- | --- |
@@ -39,46 +86,6 @@
 | 有 NVIDIA GPU + CUDA | 安装本地 TTS / ASR 依赖 | 本地 TTS、本地 ASR |
 | 想用聊天截图问答 | 安装 OCR 依赖 + Tesseract | OCR / 聊天截图分析 |
 | 想用 browser agent | 安装 browser 依赖 + Chromium | 浏览器代理 |
-
-## 新用户最快上手
-
-1. 克隆仓库
-2. 双击 `setup_persona_bot_test.bat`
-3. 按提示填写 `persona_llm_config.json`
-4. 双击 `run_persona_bot_test.bat`
-
-命令行方式：
-
-```powershell
-git clone https://github.com/BigWhiteCPN/AI-hirori-desktop-pet.git
-cd AI-hirori-desktop-pet
-.\setup_persona_bot_test.bat
-.\run_persona_bot_test.bat
-```
-
-`setup_persona_bot_test.bat` 会做这些事：
-
-- 创建 `.venv`
-- 安装 `requirements_core.txt`
-- 如果缺少 `persona_llm_config.json`，就从 `persona_llm_config.release.json` 复制一份
-- 运行 `tools/doctor.py` 做环境预检
-
-## 手动启动
-
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -U pip
-.\.venv\Scripts\python.exe -m pip install -r .\requirements_core.txt
-Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
-.\.venv\Scripts\python.exe .\tools\doctor.py
-.\.venv\Scripts\python.exe .\persona_bot_test.py --profile main
-```
-
-说明：
-
-- GitHub 发布场景默认使用 `main` profile
-- 首次运行主要读取的是 `persona_llm_config.json`
-- 如果你要做多 profile 调试，再显式使用 `--profile test` 或 `PERSONA_RUN_PROFILE=test`
 
 ## 首次配置
 
@@ -101,6 +108,25 @@ Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
 - `DOUBAO_ASR_API_KEY`
 
 `.env.example` 里保留了这些环境变量名，便于参考。
+
+## 开发者手动启动
+
+如果你不想走安装脚本，可以手动执行最小核心依赖安装：
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -U pip
+.\.venv\Scripts\python.exe -m pip install -r .\requirements_core.txt
+Copy-Item .\persona_llm_config.release.json .\persona_llm_config.json
+.\.venv\Scripts\python.exe .\tools\doctor.py
+.\.venv\Scripts\python.exe .\persona_bot_test.py --profile main
+```
+
+说明：
+
+- GitHub 发布场景默认使用 `main` profile
+- 首次运行主要读取的是 `persona_llm_config.json`
+- 如果你要做多 profile 调试，再显式使用 `--profile test` 或 `PERSONA_RUN_PROFILE=test`
 
 ## 依赖分层
 
