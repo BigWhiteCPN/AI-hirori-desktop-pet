@@ -6,10 +6,6 @@
   <img src="docs/readme-assets/hiyori-code-banner.png" alt="AI Hiyori code character banner" width="100%">
 </p>
 
-<p align="center">
-  <img src="docs/readme-assets/hiyori-desktop-preview.png" alt="AI Hiyori 桌宠运行截图" width="360">
-</p>
-
 ## 这是什么
 
 AI Hiyori Desktop Pet 是一个中文优先的本地桌宠实验项目。目标不是把 AI 塞进一个普通输入框，而是让一个 Live2D 角色长期停留在桌面上，围绕“陪伴、记忆、语音、主动反馈、轻量代理”形成一个可迭代的 AI 角色系统。
